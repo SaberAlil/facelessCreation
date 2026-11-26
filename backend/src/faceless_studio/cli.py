@@ -212,11 +212,7 @@ def new(
 
     st = Studio()
     if day is not None or on_date:
-        row = calendar_entry(st.db, day, on_date)
-        ref = {"source_file": row["source_file"], "sheet": row["source_sheet"],
-               "row": row["source_row"], "original_topic": row["original_topic"],
-               "extra": row["extra"]}
-        job = st.create_job(row["topic"], row["day"], row["date"], ref, notes)
+        job = st.create_from_calendar(calendar_entry(st.db, day, on_date), notes)
     elif topic:
         job = st.create_job(topic, notes=notes)
     else:
@@ -301,6 +297,19 @@ def research_init(job_id: JobArg) -> None:
     p = pl.paths(jid).research
     write_template(p, pl.studio.job_input(jid).topic)
     console.print(f"edit {p}")
+
+
+@research_app.command("refresh")
+@handle_errors
+def research_refresh(job_id: JobArg) -> None:
+    """Rebuild research.json from the calendar's research column (or Wikipedia).
+    Replaces the job's current research; the script approval is withdrawn."""
+    pl = _pipeline()
+    jid = _job(pl, job_id)
+    o = pl.prepare_research(jid, force=True)
+    for line in o.details["log"] if o else []:
+        console.print(f"  {line}")
+    _next(pl, jid)
 
 
 @research_app.command("add-source")
@@ -759,6 +768,42 @@ def export(job_id: JobArg) -> None:
     for f in o.details["files"]:
         console.print(f"  {f}")
     console.print("Publishing is manual. Read the disclosure reminder in youtube.txt.")
+
+
+# ------------------------------------------------------------------- make
+
+
+@app.command()
+@handle_errors
+def make(
+    day: Annotated[int | None, typer.Option(help="one calendar day")] = None,
+    days: Annotated[str | None, typer.Option(help="day range, e.g. 1-7")] = None,
+    date_from: Annotated[str | None, typer.Option("--from", help="YYYY-MM-DD")] = None,
+    date_to: Annotated[str | None, typer.Option("--to", help="YYYY-MM-DD")] = None,
+    topic: Annotated[str | None, typer.Option(help="a free topic instead of the calendar")]
+    = None,
+    limit: Annotated[int, typer.Option(help="max videos this run")] = 7,
+) -> None:
+    """Do everything automatically: research → AI script → voice → AI images → captions →
+    render, stopping only where you must approve. Run it again after each approval."""
+    from .batch import run_batch
+
+    pl = _pipeline()
+    if topic:
+        jid = pl.studio.create_job(topic).id
+        console.print(f"created {jid}")
+        gate = pl.advance(jid, on_step=lambda s: console.print(f"→ {s}"))
+        console.print(f"stopped at: [bold]{gate.state.value}[/] — {gate.reason}")
+        console.print("approve in the dashboard, or with the command below; then run "
+                      f"'faceless make' again (or 'faceless resume {jid}')")
+        if gate.next_command:
+            console.print(f"next: [cyan]{gate.next_command}[/]")
+        return
+    if day is not None:
+        days = f"{day}-{day}"
+    if not (days or date_from or date_to):
+        raise FacelessError("give --day N, --days A-B, --from/--to, or --topic TEXT")
+    run_batch(pl, console, date_from, date_to, days, limit, False, True, True, None, 1)
 
 
 # ------------------------------------------------------------------ batch

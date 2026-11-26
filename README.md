@@ -3,36 +3,39 @@ A web application that allow users to create faceless videos
 
 ## Faceless Studio: quick start
 
-A local pipeline that turns a researched topic into an original, narrated 1080x1920
-documentary short for YouTube Shorts, TikTok and Instagram Reels. Everything runs on
-this machine: Kokoro narration (CPU), faster-whisper captions (CPU), FFmpeg rendering
-(NVENC, libx264 fallback), optional Qwen3 drafts via Ollama. No paid APIs, no uploads.
-Humans approve the research/script, the asset rights and the final video; nothing is
-ever approved or published automatically.
+A local pipeline that turns a topic from your content calendar into an original, narrated
+1080x1920 documentary short for YouTube Shorts, TikTok and Instagram Reels. Everything
+runs on this machine: research lookup, script draft (Qwen3 via Ollama), Kokoro narration,
+Stable Diffusion images (ComfyUI), faster-whisper timing, Italian burned-in captions
+(translated by Qwen3), FFmpeg rendering. No paid APIs. **You approve three things**: the
+script and its facts, the images, and the final video. Nothing is approved or published
+automatically.
 
 ```bash
-# one-time (inside the dev container)
-pip install -r backend/requirements.txt        # done by setup.sh on container creation
-bash .devcontainer/install-ai-deps.sh          # CPU torch + kokoro + faster-whisper (~2 GB venv)
-faceless doctor                                # checks tools, encoders, models, disk, GPU
+# once per session: start the image generator ON THE LAPTOP (host terminal, repo folder)
+docker compose -f .devcontainer/compose.yaml -f .devcontainer/compose.local.yaml \
+  --profile comfyui up -d comfyui      # first time builds the image (several GB)
 
-# one video from a calendar day, using the sample script and research
-faceless calendar import content/samples/calendar.csv
-faceless new --day 1
-faceless draft JOB --script content/samples/day-001-script.md \
-                   --research content/samples/day-001-research.json
-faceless review-script JOB
-faceless approve-script JOB --acknowledge-flags   # only after you fact-checked the claims
-faceless voice JOB                                # Kokoro, CPU; first run downloads ~330 MB
-faceless assets JOB
+# in the dev container
+faceless doctor                                   # checks everything, incl. ComfyUI
+faceless calendar import content/faceless_content_365_day_calendar.xlsx --replace
+faceless make --day 1      # research → AI script → stops: approve the script
+faceless approve-script JOB --acknowledge-flags   # after checking the flagged claims
+faceless make --day 1      # voice → AI images → stops: approve the images
 faceless review-assets JOB --confirm-all --approve
-faceless subtitles JOB                            # first run downloads whisper small.en
-faceless render JOB --preview                     # 540x960 check
-faceless render JOB                               # 1080x1920, 30 fps, H.264/AAC
-faceless review JOB
+faceless make --day 1      # Italian captions → render → stops: watch and approve
 faceless approve-final JOB
-faceless export JOB                               # → data/jobs/JOB/export/
+faceless make --day 1      # export → data/jobs/JOB/export/
 ```
+
+Or do the same in the dashboard: **Calendar → Make video**, then approve in the tab it
+points to and press **Run automatically** again (see "Dashboard" below).
+
+**What to put in the calendar's "Research / sources" column:** one line per source
+(Alt+Enter for a new line in Excel): `https://… | one fact that page supports`. A bare URL
+also works; any other text is passed to the script writer as your note. Empty cell = the
+topic is looked up on Wikipedia as a weak starting point. Better sources give better,
+safer scripts. After editing the spreadsheet, re-import it with `--replace`.
 
 `JOB` is the id printed by `faceless new`; a unique prefix works. `faceless status JOB`
 shows the state, what is current, and the exact next command; `faceless resume JOB` runs
@@ -52,6 +55,8 @@ Full step-by-step guide, including a seven-day batch and every review action:
 | `new --day N \| --date YYYY-MM-DD \| --topic TEXT` | Create a job (one job per calendar day) |
 | `list [--state S]`, `status JOB [--json]`, `resume JOB` | Inspect / continue jobs |
 | `research init\|add-source\|add-claim\|verify\|fetch\|show JOB …` | Record sources and claims; `fetch` reads a public page's title/excerpt (bounded, no private hosts) |
+| `make --day N \| --days A-B \| --from D --to D \| --topic TEXT` | Everything automatic, stopping only at approvals; run again after each approval |
+| `research refresh JOB` | Rebuild a job's research from the (re-imported) calendar row or Wikipedia |
 | `draft JOB --script FILE \| --text TEXT \| --llm [--research FILE]` | Manual script (`.md`/`.txt`/`.json`) or a local Qwen3 draft from the research |
 | `review-script JOB`, `approve-script JOB [--acknowledge-flags] [--yes]` | Show flags; approve (records hashes) |
 | `voice JOB [--provider kokoro\|espeak] [--narration FILE]` | Narration + real per-scene timing (espeak = demo only) |
@@ -73,8 +78,13 @@ Exit codes: 0 ok, 1 error, 3 not found, 4 blocked by a review gate, 5 validation
 
 ```bash
 uvicorn faceless_studio.api:app --host 127.0.0.1 --port 8000   # or the VS Code launch config
-cd frontend && npx ng serve --port 4200                          # http://localhost:4200
+cd frontend && npx ng serve --host 127.0.0.1 --port 4200         # http://localhost:4200
 ```
+
+**Making a video in the dashboard:** Calendar → **Make video** on a day. It researches the
+topic and writes the script, then the job page says what to approve. Approve in that tab
+(type APPROVE), press **Run automatically to the next approval**, repeat. The three stops
+are: *Script & research* → *Assets* → *Preview, review & export*.
 
 Calendar, jobs, script/research editing, asset rights review with previews, caption
 editing, preview/final players, checklists, approvals (type APPROVE) and export. The API
@@ -95,7 +105,7 @@ non-local Host header. Long stages run one at a time in a single server-side wor
 ### Tests
 
 ```bash
-cd backend && pytest -q                 # 79 unit + FFmpeg integration tests (no models needed)
+cd backend && pytest -q                 # 91 unit + FFmpeg integration tests (no models needed)
 cd backend && pytest -q -m models       # real Kokoro + faster-whisper
 cd frontend && npx ng test --watch=false
 python backend/scripts/benchmark.py --videos 7   # machine-time benchmark in data/bench

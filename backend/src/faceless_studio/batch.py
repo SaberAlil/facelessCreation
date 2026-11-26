@@ -40,7 +40,7 @@ def plan_batch(pl: Pipeline, date_from: str | None, date_to: str | None, days: s
     plan = []
     for r in rows[:limit]:
         plan.append({"day": r["day"], "date": r["date"], "topic": r["topic"],
-                     "job": existing.get(r["day"])})
+                     "job": existing.get(r["day"]), "row": r})
     return plan
 
 
@@ -59,24 +59,16 @@ def process_day(pl: Pipeline, item: dict, resume_jobs: bool, llm: bool,
     """Create (or continue) the job for one calendar day and advance it to a gate."""
     job = item["job"]
     if job is None:
-        row = item
-        created = pl.studio.create_job(row["topic"], row["day"], row["date"],
-                                       {"batch": True})
-        jid = created.id
+        jid = pl.studio.create_from_calendar(item["row"]).id
     else:
         jid = job["id"]
         if not resume_jobs:
             return jid, None, "exists (skipped: --no-resume)"
     try:
-        gate = pl.next_gate(jid)
-        if gate.state.value == "DRAFT":
-            rpath = _research_for(research_dir, item["day"])
-            if rpath:
-                pl.set_research(jid, rpath)
-            if llm and (rpath or pl.research(jid).sources):
-                pl.draft(jid, use_llm=True)
-            return jid, pl.next_gate(jid), None
-        return jid, pl.advance(jid), None
+        rpath = _research_for(research_dir, item["day"])
+        if rpath and not pl.paths(jid).research.is_file():
+            pl.set_research(jid, rpath)
+        return jid, pl.advance(jid, auto_draft=llm), None
     except FacelessError as e:
         return jid, None, f"{type(e).__name__}: {e}"
 

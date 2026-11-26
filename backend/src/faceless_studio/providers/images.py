@@ -80,6 +80,21 @@ class ComfyUIProvider:
         wf["3"]["inputs"].update({"seed": seed, "steps": steps, "cfg": self.cfg.cfg})
         return wf
 
+    def available(self) -> tuple[bool, str]:
+        """Is ComfyUI up, and does it have the configured checkpoint?"""
+        try:
+            r = self.client.get("/object_info/CheckpointLoaderSimple", timeout=10)
+            r.raise_for_status()
+        except httpx.HTTPError as e:
+            return False, f"ComfyUI not reachable at {self.cfg.host} ({type(e).__name__})"
+        try:
+            names = r.json()["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0]
+        except (KeyError, IndexError, TypeError, ValueError):
+            return True, "checkpoint list unavailable"
+        if self.cfg.checkpoint not in names:
+            return False, f"checkpoint {self.cfg.checkpoint} not found in ComfyUI (has {names})"
+        return True, "ok"
+
     def free(self) -> None:
         with contextlib.suppress(httpx.HTTPError):
             self.client.post("/free", json={"unload_models": True, "free_memory": True})

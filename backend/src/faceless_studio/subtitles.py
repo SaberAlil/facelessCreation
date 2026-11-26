@@ -174,6 +174,91 @@ def scene_bounds_from_words(script: Script, words: list[Word]) -> list[tuple[flo
     return out
 
 
+# ---------------------------------------------------------------- translation
+
+
+def sentences_from_words(words: list[Word]) -> list[tuple[str, float, float]]:
+    """(text, start, end) per sentence of the timed script words."""
+    out: list[tuple[str, float, float]] = []
+    cur: list[Word] = []
+    for w in words:
+        cur.append(w)
+        if re.search(r"[.!?]['\"”’)]*$", w.text):
+            out.append((" ".join(x.text for x in cur), cur[0].start, cur[-1].end))
+            cur = []
+    if cur:
+        out.append((" ".join(x.text for x in cur), cur[0].start, cur[-1].end))
+    return out
+
+
+def words_for_translation(sentences: list[tuple[str, float, float]],
+                          translations: list[str]) -> list[Word]:
+    """Spread each translated sentence over the time its English sentence is spoken."""
+    out: list[Word] = []
+    for (_en, start, end), text in zip(sentences, translations, strict=True):
+        ws = text.split()
+        if not ws:
+            continue
+        weights = [len(w) + 1 for w in ws]
+        tot = sum(weights)
+        t = start
+        for w, wt in zip(ws, weights, strict=True):
+            d = (end - start) * wt / tot
+            out.append(Word(text=w, start=round(t, 3), end=round(t + d, 3)))
+            t += d
+    return out
+
+
+def chunk_translated(sentences: list[tuple[str, float, float]], translations: list[str],
+                     cfg: SubtitleConfig) -> list[Caption]:
+    """Captions for translated text: split each sentence into readable chunks by text,
+    time them by length within the English sentence's span, and merge chunks that would
+    be too short to read."""
+    max_chars = cfg.max_chars_per_line * cfg.max_lines
+    caps: list[Caption] = []
+    for (_en, start, end), text in zip(sentences, translations, strict=True):
+        words = text.split()
+        if not words:
+            continue
+        chunks: list[list[str]] = []
+        cur: list[str] = []
+        for w in words:
+            if cur and (len(" ".join([*cur, w])) > max_chars or len(cur) >= cfg.max_words + 1):
+                chunks.append(cur)
+                cur = []
+            cur.append(w)
+            if len(cur) >= cfg.min_words + 1 and re.search(r"[,;:—–]$", w):
+                chunks.append(cur)
+                cur = []
+        if cur:
+            chunks.append(cur)
+        span = max(end - start, 0.01)
+        weights = [len(" ".join(c)) + 1 for c in chunks]
+        durs = [span * wt / sum(weights) for wt in weights]
+        # merge too-short chunks into a neighbour while it still fits on screen
+        i = 0
+        while i < len(chunks) and len(chunks) > 1:
+            if durs[i] >= cfg.min_duration_s:
+                i += 1
+                continue
+            j = i + 1 if i + 1 < len(chunks) else i - 1
+            a, b = sorted((i, j))
+            chunks[a:b + 1] = [chunks[a] + chunks[b]]
+            durs[a:b + 1] = [durs[a] + durs[b]]
+            i = 0
+        t = start
+        for chunk, d in zip(chunks, durs, strict=True):
+            caps.append(Caption(index=len(caps) + 1, start=round(t, 3), end=round(t + d, 3),
+                                text=layout_lines(" ".join(chunk), cfg)))
+            t += d
+    # hold captions across short gaps between sentences
+    for i, c in enumerate(caps[:-1]):
+        nxt = caps[i + 1].start
+        if 0 < nxt - c.end < 0.3:
+            c.end = nxt
+    return caps
+
+
 # ------------------------------------------------------------------- chunking
 
 _BREAK_AFTER = re.compile(r"[.!?;:,—–-]$")

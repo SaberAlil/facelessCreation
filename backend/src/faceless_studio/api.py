@@ -262,14 +262,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         from .calendar import calendar_entry
         if body.day is not None or body.date:
             row = calendar_entry(pl.studio.db, body.day, body.date)
-            j = pl.studio.create_job(row["topic"], row["day"], row["date"],
-                                     {"row": row["source_row"],
-                                      "original_topic": row["original_topic"]})
+            j = pl.studio.create_from_calendar(row)
         elif body.topic:
             j = pl.studio.create_job(body.topic)
         else:
             raise FacelessError("give topic, day or date")
         return j.model_dump()
+
+    @app.post("/api/make", status_code=202)
+    def make(body: NewJob) -> Task:
+        """Create the job if needed, then run every automatic stage until an approval."""
+        from .calendar import calendar_entry
+        if body.day is not None or body.date:
+            row = calendar_entry(pl.studio.db, body.day, body.date)
+            existing = pl.studio.db.one("SELECT id FROM jobs WHERE day = ?", (row["day"],))
+            jid = existing["id"] if existing else pl.studio.create_from_calendar(row).id
+        elif body.topic:
+            jid = pl.studio.create_job(body.topic).id
+        else:
+            raise FacelessError("give topic, day or date")
+        return worker.submit(jid, "make", lambda: pl.advance(jid))
 
     @app.get("/api/jobs/{job_id}")
     def job_detail(job_id: str = Depends(job)) -> dict:

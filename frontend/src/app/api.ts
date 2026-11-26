@@ -69,7 +69,8 @@ export interface AssetsView {
 
 export interface Caption { index: number; start: number; end: number; text: string }
 export interface CaptionsView {
-  track: { source: string; model: string; approximate: boolean; reviewed: boolean;
+  track: { source: string; model: string; language: string; translated_by: string;
+           approximate: boolean; reviewed: boolean;
            divergence_ratio: number | null; divergences: string[]; captions: Caption[] } | null;
   fresh: boolean;
 }
@@ -87,6 +88,7 @@ export interface Task {
 export interface CalendarRow {
   day: number; date: string | null; topic: string; original_topic: string;
   source_row: number; job: { id: string; state: JobState } | null;
+  extra: Record<string, unknown>;
 }
 
 export interface Approval { confirm: string; reviewer: string; notes?: string; acknowledge_flags?: boolean }
@@ -113,6 +115,10 @@ export class Api {
     return this.p(this.http.post<{ id: string }>('/api/jobs', body));
   }
   job(id: string) { return this.p(this.http.get<JobDetail>(`/api/jobs/${id}`)); }
+  /** Create the job if needed and run every automatic stage until an approval. */
+  make(body: { day?: number; topic?: string }) {
+    return this.p(this.http.post<Task>('/api/make', body));
+  }
   run(id: string, stage: string) {
     return this.p(this.http.post<Task>(`/api/jobs/${id}/run/${stage}`, {}));
   }

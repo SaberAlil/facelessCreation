@@ -100,8 +100,30 @@ def _zoompan(motion: str, frames: int, W: int, H: int, fps: int, zoom: float) ->
     return f"zoompan=z='{z}':x='{x}':y='{y}':d=1:s={W}x{H}:fps={fps}"
 
 
+def overlay_filters(text: str, workdir: Path, tag: str, s: Settings, W: int, H: int) -> str:
+    """Headline text in a translucent box near the top (above the caption zone).
+
+    Text goes through ``textfile=`` so it is never parsed as filter syntax.
+    """
+    lines = textwrap.wrap(" ".join(text.split()), 16, break_on_hyphens=False)[:3]
+    if not lines:
+        return ""
+    size = int(W * 0.075)
+    y0 = int(H * 0.17)
+    out = []
+    for i, line in enumerate(lines):
+        f = workdir / f".ov-{tag}-{i}.txt"
+        f.write_text(line, encoding="utf-8")
+        out.append(f"drawtext=fontfile={esc(s.font_file())}:textfile={esc(f)}:expansion=none:"
+                   f"fontsize={size}:fontcolor=white:x=(w-text_w)/2:"
+                   f"y={int(y0 + i * size * 1.3)}:box=1:boxcolor=black@0.5:"
+                   f"boxborderw={max(6, size // 4)}")
+    return ",".join(out)
+
+
 def scene_clip_cmd(asset: SceneAsset, src: Path, frames: int, idx: int, W: int, H: int,
-                   fps: int, s: Settings, encoder: str, preview: bool, out: Path) -> list[str]:
+                   fps: int, s: Settings, encoder: str, preview: bool, out: Path,
+                   overlay: str = "") -> list[str]:
     dims: tuple[int | None, int | None] = (None, None)
     if asset.kind == "video":
         w, h, _ = media.media_dims(src)
@@ -113,15 +135,15 @@ def scene_clip_cmd(asset: SceneAsset, src: Path, frames: int, idx: int, W: int, 
         graph = f"[0:v]fps={fps},{_fit_filters(dims[0], dims[1], W, H, s.render.fit_mode, 'f')}"
         # A gentle push-in keeps short loops from looking static.
         graph += (f";[f]scale={int(W * 1.06) // 2 * 2}:{int(H * 1.06) // 2 * 2},"
-                  f"crop={W}:{H}:x='(iw-ow)/2*(1-t/{dur:.3f})':y='(ih-oh)/2',"
-                  f"format=yuv420p[v]")
+                  f"crop={W}:{H}:x='(iw-ow)/2*(1-t/{dur:.3f})':y='(ih-oh)/2'"
+                  f"{',' + overlay if overlay else ''},format=yuv420p[v]")
     else:
         # Stills: ``src`` is already fitted at 2x (see prepare_still_cmd); add smooth
         # Ken Burns motion back down to WxH.
         args += ["-loop", "1", "-framerate", str(fps), "-i", str(src)]
         motion = MOTIONS[idx % len(MOTIONS)]
         graph = (f"[0:v]{_zoompan(motion, frames, W, H, fps, s.render.motion_zoom)},"
-                 f"format=yuv420p[v]")
+                 f"{overlay + ',' if overlay else ''}format=yuv420p[v]")
     args += ["-filter_complex", graph, "-map", "[v]", "-frames:v", str(frames), "-r", str(fps),
              "-an", *media.video_codec_args(encoder, s.render, preview, intermediate=True),
              "-pix_fmt", "yuv420p", str(out)]
@@ -269,12 +291,18 @@ def _render(s: Settings, paths: JobPaths, timing: VoiceTiming, manifest: AssetMa
         if encoder == "h264_nvenc" and not dry_run else _nullctx()
     clips: list[Path] = []
     reused = 0
+    # Original graphics already contain their text; photos, AI images and clips get the
+    # scene's overlay drawn on top (the "main" on-screen text).
+    overlays = {sc.id: sc.overlay for sc in script.scenes if sc.overlay and r.overlay_on_media}
+    overlays = {k: v for k, v in overlays.items()
+                if next((a.kind for a in manifest.scenes if a.scene_id == k), "") != "procedural"}
     with lock:
         for i, (asset, n) in enumerate(zip(manifest.scenes, frames, strict=True)):
             src = asset_file(paths, asset)
             key = hash_obj({"sha": asset.sha256, "n": n, "i": i, "W": W, "H": H, "fps": r.fps,
                             "enc": encoder, "zoom": r.motion_zoom, "fit": r.fit_mode,
-                            "q": media.video_codec_args(encoder, r, preview, True), "v": 2})[:16]
+                            "q": media.video_codec_args(encoder, r, preview, True), "v": 3,
+                            "ov": overlays.get(asset.scene_id, "")})[:16]
             clip = clip_dir / f"{asset.scene_id}-{key}.mp4"
             clips.append(clip)
             if asset.kind != "video":
@@ -285,8 +313,11 @@ def _render(s: Settings, paths: JobPaths, timing: VoiceTiming, manifest: AssetMa
                     run(pcmd, timeout=120, log_file=paths.render_log)
                     tmp_path_for(still).replace(still)
                 src = still
+            ov = overlays.get(asset.scene_id, "")
+            ov_filter = overlay_filters(ov, clip_dir, asset.scene_id, s, W, H) \
+                if ov and not dry_run else (f"drawtext=<overlay: {ov}>" if ov else "")
             cmd = scene_clip_cmd(asset, src, n, i, W, H, r.fps, s, encoder, preview,
-                                 tmp_path_for(clip))
+                                 tmp_path_for(clip), ov_filter)
             plan.commands.append(cmd)
             if dry_run:
                 continue
@@ -326,6 +357,8 @@ def _render(s: Settings, paths: JobPaths, timing: VoiceTiming, manifest: AssetMa
     # Clean stale clips from previous plans for this resolution.
     keep = {c.name for c in clips}
     keep |= {f"{a.scene_id}-{a.sha256[:12]}-{r.fit_mode}.png" for a in manifest.scenes}
+    for f in clip_dir.glob(".ov-*.txt"):
+        f.unlink(missing_ok=True)
     for old in [*clip_dir.glob("*.mp4"), *clip_dir.glob("*.png")]:
         if old.name not in keep:
             old.unlink(missing_ok=True)

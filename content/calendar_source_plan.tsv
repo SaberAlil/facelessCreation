@@ -1,0 +1,366 @@
+day	wikipedia_title	paper_query
+1	Gruen transfer; IKEA	store layout consumer behavior
+2	Supermarket	store layout shopping behavior
+3	Costco	membership fee warehouse club
+4	Psychological pricing	left-digit effect price
+5	Impulse purchase	impulse buying checkout
+6	Private label	private label brands
+7	Luxury goods	luxury brands pricing
+8	Outlet store	factory outlet stores
+9	Planogram	shelf space allocation
+10	Loyalty program	loyalty program purchase behavior
+11	Free shipping	free shipping threshold
+12	Buy one, get one free	price promotion bundle
+13	Seasonality	seasonal demand retail
+14	Planogram	shelf position product sales
+15	Shopping cart	shopping cart size purchase
+16	Loss leader	loss leader pricing
+17	Concession stand	movie theater concession pricing
+18	Fast fashion	fast fashion supply chain
+19	Electronic shelf label	electronic shelf labels
+20	Product return	product returns retail
+21	Pharmacy	retail pharmacy business
+22	Vending machine	vending machine sales
+23	Duty-free shop	airport retail
+24	Subscription box	subscription box business model
+25	Retail design	store atmospherics
+26	Warehouse club	warehouse club retail
+27	Packaging and labeling	package size consumer
+28	Wish list	online wish list
+29	Point of sale	shopping cart abandonment
+30	Gift card	gift card breakage
+31	Price matching	price matching guarantee
+32	Visa Inc.	interchange fee card payments
+33	Mastercard	interchange fee card networks
+34	Airbnb	Airbnb sharing economy
+35	Uber	ride-hailing surge pricing
+36	Spotify	music streaming royalties
+37	Netflix	Netflix original content
+38	YouTube	YouTube advertising
+39	Freemium	freemium business model
+40	Business models for open-source software	open source business model
+41	Cloud computing	cloud computing pricing
+42	Franchising	franchising business
+43	McDonald's	McDonald's franchise real estate
+44	The Lego Group	LEGO innovation
+45	Nintendo	video game console pricing
+46	IKEA	IKEA business model
+47	Two-sided market	two-sided markets platform
+48	Churn rate	customer churn subscription
+49	Insurance	risk pooling insurance
+50	Low-cost carrier	low-cost airlines ancillary revenue
+51	Payment service provider	payment service providers banks
+52	Search engine marketing	search engine advertising revenue
+53	Newsletter	email newsletters
+54	Coworking	coworking spaces business
+55	Car rental	car rental fleet management
+56	Health club	fitness club membership
+57	Food delivery	food delivery platform commission
+58	Hotel	hotel revenue management
+59	Affiliate marketing	affiliate marketing
+60	Uniform Resource Locator	web browser request
+61	Domain Name System	domain name system
+62	Content delivery network	content delivery networks
+63	Browser engine	web page rendering
+64	HTTP cookie	web cookies privacy
+65	Password manager	password managers security
+66	WebAuthn	passwordless authentication
+67	Multi-factor authentication	two-factor authentication
+68	CAPTCHA	CAPTCHA usability security
+69	QR code	QR code error correction
+70	Simple Mail Transfer Protocol	electronic mail system
+71	Email spam	spam filtering machine learning
+72	Adaptive bitrate streaming	adaptive bitrate streaming
+73	Videotelephony	video conferencing quality
+74	Data compression	lossless data compression
+75	API	web API design
+76	Webhook	event-driven web services
+77	Web indexing	search engine indexing
+78	Replication (computing)	data replication cloud storage
+79	Backup	data backup
+80	Database index	database indexing
+81	Cache (computing)	web caching
+82	Light-on-dark color scheme	dark mode display
+83	Software release life cycle	continuous deployment
+84	Open-source license	open source licenses
+85	App store	app store review
+86	Domain name registrar	domain name registration
+87	HTTPS	HTTPS security
+88	Recommender system	recommender systems
+89	Computer accessibility	web accessibility
+90	Software as a service	software as a service pricing
+91	Large language model	large language models
+92	Hallucination (artificial intelligence)	language model hallucination
+93	Lexical analysis	tokenization language models
+94	Diffusion model	diffusion models image generation
+95	Prompt engineering	prompt engineering language models
+96	Speech recognition	automatic speech recognition
+97	Speech synthesis	text-to-speech synthesis
+98	Retrieval-augmented generation	retrieval-augmented generation
+99	Intelligent agent	language model agents
+100	Chatbot	chatbots information retrieval
+101	Object detection	object detection deep learning
+102	Data center	data center energy consumption
+103	Graphics processing unit	GPU deep learning
+104	Knowledge distillation	small language models
+105	Machine translation	machine translation ambiguity
+106	Document processing	invoice information extraction
+107	Machine vision	visual inspection defect detection
+108	Collaborative filtering	collaborative filtering
+109	Inference engine	deep learning inference cost
+110	Digital watermarking	AI-generated content detection
+111	Human-in-the-loop	human-in-the-loop machine learning
+112	Robotic sensing	robot sensors
+113	Automated guided vehicle	mobile robots warehouse
+114	Robotic vacuum cleaner	cleaning robot coverage
+115	Numerical weather prediction	machine learning weather forecasting
+116	Recycling	waste sorting machine learning
+117	Benchmark (computing)	benchmark machine learning evaluation
+118	Assistive technology	AI accessibility assistive
+119	Robotic process automation	robotic process automation
+120	Reliability engineering	machine learning systems reliability
+121	Inflation	inflation measurement
+122	Real versus nominal value (economics)	real and nominal prices
+123	Compound interest	compound interest financial literacy
+124	Central bank	monetary policy interest rates
+125	Bond (finance)	bond market
+126	Bond valuation	bond prices interest rates
+127	Index fund	index funds
+128	Diversification (finance)	portfolio diversification
+129	Exchange rate	exchange rate pass-through
+130	Exchange rate	purchasing power parity
+131	Bank	bank net interest margin
+132	Credit score	credit scoring
+133	Mortgage loan	mortgage interest rates
+134	Deductible	insurance deductible choice
+135	Cash flow	cash flow small business
+136	Profit (accounting)	revenue and profit
+137	Cash flow	small business cash flow
+138	Depreciation	depreciation accounting
+139	Balance sheet	balance sheet analysis
+140	Working capital	inventory working capital
+141	Economies of scale	economies of scale
+142	Opportunity cost	opportunity cost
+143	Scarcity	scarcity prices
+144	Supply and demand	supply and demand
+145	Recession	recession measurement
+146	Productivity	productivity and wages
+147	Comparative advantage	comparative advantage trade
+148	Tariff	tariffs import prices
+149	Government budget balance	budget deficit
+150	Government debt	public debt financing
+151	Gross domestic product	beyond GDP wellbeing
+152	Containerization	containerization trade
+153	Container port	container terminal operations
+154	Flag of convenience	flags of convenience shipping
+155	Marine insurance	marine insurance
+156	Air cargo	air freight
+157	Distribution center	parcel sorting
+158	Last mile (transportation)	last mile delivery
+159	Vehicle routing problem	vehicle routing problem
+160	Barcode	barcode logistics
+161	Cold chain	cold chain food
+162	Cross-docking	cross-docking
+163	Just-in-time manufacturing	just-in-time inventory
+164	Safety stock	safety stock inventory
+165	Pallet	pallet logistics
+166	Rail freight transport	rail freight truck
+167	Railway signalling	railway signalling
+168	High-speed rail	high-speed rail travel time
+169	Crew scheduling	airline scheduling
+170	Spoke–hub distribution paradigm	hub-and-spoke airline networks
+171	Baggage handling system	airport baggage handling
+172	De Havilland Comet	aircraft fuselage fatigue
+173	Deicing	aircraft deicing
+174	Airline boarding	airplane boarding strategies
+175	Dynamic pricing	airline dynamic pricing
+176	Carsharing	carsharing fleet
+177	Charging station	electric vehicle charging pricing
+178	Toll road	road pricing tolls
+179	Traffic light control and coordination	traffic signal coordination
+180	Traffic estimation and prediction system	traffic speed estimation GPS
+181	Cargo bike	cargo bikes urban logistics
+182	Universal Product Code	universal product code
+183	Unified Thread Standard	screw thread
+184	Interchangeable parts	interchangeable parts manufacturing
+185	Assembly line	assembly line production
+186	Injection moulding	injection molding
+187	Beverage can	aluminium beverage can
+188	Glass production	glass container manufacturing
+189	Paper recycling	paper recycling
+190	Corrugated fiberboard	corrugated board
+191	Lithium-ion battery	lithium-ion batteries
+192	Solar cell	photovoltaic solar cells
+193	Wind turbine	wind turbines
+194	Heat pump	heat pumps
+195	Induction cooking	induction heating cooking
+196	Refrigerator	vapor compression refrigeration
+197	Microwave oven	microwave heating food
+198	Escalator	escalator
+199	Elevator	elevator counterweight
+200	Water filter	water filtration
+201	Desalination	reverse osmosis desalination
+202	Semiconductor device fabrication	semiconductor fabrication
+203	Optical fiber	optical fiber communication
+204	3D printing	3D printing additive manufacturing
+205	Industrial robot	industrial robots
+206	Active noise control	active noise cancellation headphones
+207	Touchscreen	capacitive touchscreen
+208	E-paper	electronic paper display
+209	Image sensor	CMOS image sensor
+210	Mechanical watch	clock escapement
+211	Ballpoint pen	ballpoint pen
+212	Safety standards	product safety standards
+213	Restaurant management	restaurant food cost
+214	Menu engineering	menu engineering
+215	Restaurant management	restaurant table management
+216	Food delivery	food delivery platform restaurants
+217	Revenue management	hotel revenue management
+218	Revenue management	hotel occupancy
+219	Hotel rating	hotel star rating
+220	Online travel agency	online travel agency commission
+221	Vacation rental	vacation rentals
+222	Travel insurance	travel insurance
+223	Cruise ship	cruise industry revenue
+224	Buffet	buffet food waste
+225	Coffeehouse	coffee price consumer
+226	Coffee production	coffee value chain
+227	Specialty coffee	specialty coffee
+228	Chocolate	chocolate manufacturing
+229	Olive oil	olive oil quality classification
+230	Pasta	pasta drying
+231	Frozen food	frozen food waste
+232	Shelf life	date labeling food waste
+233	Demand forecasting	fresh food demand forecasting
+234	Modified atmosphere	modified atmosphere packaging
+235	Table reservation	restaurant reservations
+236	Food truck	food trucks
+237	Airline meal	airline catering
+238	Queue area	theme park queues
+239	Museum	museum admission pricing
+240	Crowd management	tourist attraction congestion
+241	Duty-free shop	duty-free shopping
+242	Bid–ask spread	currency conversion fees tourists
+243	Frequent-flyer program	frequent flyer programs
+244	Logo	logo design
+245	Packaging and labeling	packaging color consumer
+246	Mascot	brand mascots
+247	Positioning (marketing)	brand positioning
+248	Sports sponsorship	sports sponsorship
+249	Product placement	product placement
+250	Purchase funnel	purchase funnel
+251	Impression (online media)	online advertising impressions
+252	Real-time bidding	online ad auctions
+253	A/B testing	A/B testing online experiments
+254	Conversion rate optimization	conversion rate
+255	Landing page	website design purchase intention
+256	Social proof	social proof
+257	Anchoring effect	anchoring effect
+258	Decoy effect	decoy effect
+259	Default effect	default options choice
+260	Scarcity (social psychology)	scarcity messages
+261	Overchoice	choice overload
+262	Free trial	free trials
+263	Referral marketing	referral programs
+264	Search advertising	search advertising display advertising
+265	Email marketing	email marketing engagement
+266	CAN-SPAM Act of 2003	unsolicited commercial email
+267	Market segmentation	loyalty program segmentation
+268	Rebranding	rebranding
+269	Trademark	trademark copyright
+270	Packaging and labeling	packaging perceived value
+271	User experience	user experience customer loyalty
+272	User research	customer interviews needs
+273	Customer acquisition cost	customer acquisition cost
+274	Water supply network	drinking water distribution
+275	Wastewater treatment	wastewater treatment
+276	Storm drain	stormwater sewer separation
+277	Electric power distribution	electricity distribution
+278	Electrical grid	power grid frequency control
+279	Pumped-storage hydroelectricity	pumped hydro storage
+280	Smart meter	smart meters
+281	Electricity pricing	time-of-use electricity pricing
+282	District heating	district heating
+283	Thermal insulation	building thermal insulation
+284	Ventilation (architecture)	building ventilation
+285	Tuned mass damper	tuned mass damper
+286	Expansion joint	bridge expansion joints
+287	Road surface	road drainage
+288	Tunnel	tunnel ventilation
+289	Railway signalling	metro headway
+290	Fare	public transport ticketing
+291	Bus lane	bus lanes
+292	Bicycle-sharing system	bike sharing systems
+293	Parking meter	parking pricing demand
+294	Urban heat island	urban trees cooling
+295	Flood control	urban flood management
+296	Landfill gas	landfill gas capture
+297	Materials recovery facility	waste sorting recycling facility
+298	Container-deposit legislation	deposit refund system
+299	Fiber to the x	fiber to the home
+300	Submarine communications cable	submarine cables
+301	Communications satellite	satellite communication
+302	Global Positioning System	GPS positioning
+303	Computer-aided dispatch	emergency dispatch
+304	Asset management	infrastructure asset management
+305	Minimum viable product	minimum viable product
+306	Willingness to pay	willingness to pay measurement
+307	Niche market	niche market strategy
+308	Product-market fit	product-market fit
+309	Bootstrapping	bootstrapping startups venture capital
+310	Equity financing	startup equity financing
+311	Business valuation	startup valuation
+312	Burn rate	startup runway
+313	Contribution margin	unit economics
+314	Gross margin	gross margin
+315	Recurring revenue	subscription revenue model
+316	Subscription business model	subscription pricing
+317	Tiered pricing	software pricing
+318	Enterprise software	enterprise software
+319	Utility computing	usage-based pricing
+320	Product launch	new product preannouncement
+321	Customer retention	customer retention
+322	Product return	refund policy
+323	Customer service	customer support costs
+324	Internationalization	international expansion firms
+325	Language localisation	software localization
+326	License	franchising licensing
+327	Distribution (marketing)	distribution channels
+328	Mergers and acquisitions	acquisitions competitors
+329	Network effect	network effects
+330	Switching barriers	switching costs
+331	Commoditization	commoditization
+332	Product management	product prioritization
+333	Customer lifetime value	customer profitability
+334	Small business	small firms competitive advantage
+335	Near-field communication	contactless payment
+336	Automated teller machine	ATM network
+337	Thermal paper	thermal paper receipts
+338	E-ticket	electronic ticketing public transport
+339	Stored-value card	stored value cards
+340	Holiday shopping season	holiday shopping
+341	Inventory planning	seasonal inventory planning
+342	Sales tax	internet sales tax
+343	Warranty	product warranties
+344	Repair	repair services
+345	Spare part	spare parts pricing
+346	Online marketplace	online marketplace trust
+347	Online auction	online auction design
+348	Charity shop	secondhand pricing
+349	Serial number	product traceability
+350	Product recall	product recalls
+351	Online review	online reviews sales
+352	Comparison shopping website	price comparison websites
+353	Coupon	online coupons
+354	Software license	software licensing models
+355	Donation	online charitable giving
+356	Crowdfunding	crowdfunding
+357	Kickstarter	reward-based crowdfunding
+358	Subscription business model	subscription consumer inertia
+359	Price discrimination	streaming subscription
+360	Electronic waste	e-waste material recovery
+361	Data center	data center cooling
+362	Budget	corporate budgeting
+363	Closing entries	financial statement closing
+364	Physical inventory	inventory record inaccuracy
+365	Systems thinking	systems thinking

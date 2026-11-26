@@ -183,7 +183,7 @@ def test_export_package_contents(pipeline, short_script, research_file, tone_tts
     assert pl.refresh(j) == JobState.EXPORTED
     out = pl.paths(j).export_dir
     names = sorted(f.name for f in out.iterdir())
-    assert names == sorted([f"{j}.mp4", f"{j}-cover.png", f"{j}.srt", "youtube.txt",
+    assert names == sorted([f"{j}.mp4", f"{j}-cover.png", f"{j}.en.srt", "youtube.txt",
                             "tiktok.txt", "instagram.txt", "sources.json", "metadata.json",
                             "review.json"])
     yt = (out / "youtube.txt").read_text()

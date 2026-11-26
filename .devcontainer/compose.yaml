@@ -64,6 +64,9 @@ services:
       - "127.0.0.1:8188:8188"
     volumes:
       - comfyui-models:/opt/ComfyUI/models
+      # Checkpoints live in the (git-ignored) workspace folder so the dev container can
+      # place them: models/comfyui/checkpoints/v1-5-pruned-emaonly.safetensors
+      - ../models/comfyui/checkpoints:/opt/ComfyUI/models/checkpoints:ro
       - comfyui-output:/opt/ComfyUI/output
 
 volumes:

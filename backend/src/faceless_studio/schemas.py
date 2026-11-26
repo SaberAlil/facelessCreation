@@ -252,6 +252,8 @@ class Caption(Strict):
 class CaptionTrack(Strict):
     source: Literal["whisper", "approximate", "imported"]
     model: str = ""
+    language: str = "en"
+    translated_by: str = ""  # model that translated from the English narration, if any
     approximate: bool = False
     reviewed: bool = False
     divergence_ratio: float | None = None

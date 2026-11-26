@@ -120,3 +120,17 @@ def test_one_task_per_job(client):
     gate.set()
     w.wait_idle()
     assert pl.studio.get_job(jid)
+
+
+def test_make_endpoint_creates_and_runs(client):
+    with open(SAMPLES / "calendar.csv", "rb") as f:
+        client.post("/api/calendar/import", files={"file": ("cal.csv", f, "text/csv")},
+                    headers=H)
+    t = client.post("/api/make", json={"day": 3}, headers=H).json()
+    done = _wait(client, t)
+    assert done["status"] == "done", done
+    d = client.get(f"/api/jobs/{t['job_id']}").json()
+    # no research in the sample calendar and Wikipedia disabled in tests: stops with a hint
+    assert d["gate"]["state"] == "DRAFT" and "research" in d["gate"]["reason"]
+    again = client.post("/api/make", json={"day": 3}, headers=H).json()
+    assert again["job_id"] == t["job_id"]  # never a second job for the same day

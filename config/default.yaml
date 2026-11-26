@@ -9,8 +9,8 @@ channel:
   name: The Hidden Logic
   language: en
   default_hashtags:
-  - '#TheHiddenLogic'
-  - '#economics'
+    - "#TheHiddenLogic"
+    - "#economics"
 script:
   target_words_min: 150
   target_words_max: 185
@@ -54,14 +54,16 @@ subtitles:
   font_size: 84
   outline: 5
   shadow: 2
-  primary_colour: '&H00FFFFFF'
-  accent_colour: '&H0000D7FF'
-  outline_colour: '&H00000000'
+  primary_colour: "&H00FFFFFF"
+  accent_colour: "&H0000D7FF"
+  outline_colour: "&H00000000"
   highlight_keywords: false
   margin_v: 600
   margin_l: 90
   margin_r: 170
   divergence_ratio_warn: 0.9
+  burn_language: it
+  translate_model: ""
 render:
   width: 1080
   height: 1920
@@ -78,10 +80,11 @@ render:
   loudness_lufs: -14.0
   true_peak_db: -1.0
   music_volume_db: -22.0
+  overlay_on_media: true
   motion_zoom: 0.1
   fit_mode: auto
   min_duration_s: 45.0
-  max_duration_s: 90.0
+  max_duration_s: 120.0
   duration_tolerance_s: 0.15
   scene_timeout_s: 600.0
   final_timeout_s: 1800.0
@@ -91,18 +94,27 @@ resources:
   gpu_lock_timeout_s: 900.0
   nvenc_vram_mib: 300
   sample_interval_s: 1.0
+research:
+  calendar_column_hints:
+    - research
+    - source
+  auto_wikipedia: true
+  max_sources: 4
+  excerpt_chars: 1500
 stock:
   pexels_enabled: false
   max_download_mb: 80
   timeout_s: 30.0
   per_scene_candidates: 3
 comfyui:
-  enabled: false
-  host: http://127.0.0.1:8188
+  enabled: true
+  use_by_default: true
+  host: http://comfyui:8188
   workflow: config/comfyui/sd15_portrait.json
-  checkpoint: ''
-  checkpoint_license: ''
-  checkpoint_commercial_use: false
+  checkpoint: v1-5-pruned-emaonly.safetensors
+  checkpoint_license: CreativeML OpenRAIL-M (stable-diffusion-v1-5)
+  checkpoint_commercial_use: true
+  style: documentary photograph, natural light, realistic, 35mm, sharp focus, high detail
   width: 512
   height: 768
   steps: 20

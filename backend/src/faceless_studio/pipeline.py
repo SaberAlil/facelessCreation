@@ -163,7 +163,7 @@ class Pipeline:
         sc = self.script(job_id)
         if voice_h is None or assets_h is None or sc is None:
             return None
-        return hash_obj({"voice": voice_h, "assets": assets_h,
+        return hash_obj({"voice": voice_h, "assets": assets_h, "script": self.script_hash(job_id),
                          "subs": self.subtitles_output_hash(job_id), "preview": preview,
                          "render": self._render_settings(), "font": str(self.s.font_file()),
                          "title": sc.title})
@@ -235,7 +235,7 @@ class Pipeline:
 
     def derive_state(self, job_id: str) -> tuple[JobState, str | None, str | None]:
         """Achieved state, overlaid with FAILED if a stage's latest run failed."""
-        for st in ["draft", *STAGES]:
+        for st in ["research", "draft", *STAGES]:
             last = self.studio.last_run(job_id, st)
             if last and last["status"] == "failed":
                 return JobState.FAILED, st, last["error"]
@@ -283,6 +283,44 @@ class Pipeline:
         return StageOutcome(stage, details, m.as_dict(), m.fallbacks)
 
     # ======================================================== M2: scripts
+    def calendar_research_cell(self, job_id: str) -> str:
+        """Research cell from the *current* calendar row (re-imports win), else the
+        snapshot taken when the job was created."""
+        job = self.studio.job_input(job_id)
+        extra = (job.calendar_ref or {}).get("extra") or {}
+        if job.day is not None:
+            row = self.studio.db.one("SELECT extra FROM calendar WHERE day = ?", (job.day,))
+            if row:
+                import json as _json
+                extra = _json.loads(row["extra"] or "{}")
+        hints = [h.lower() for h in self.s.research.calendar_column_hints]
+        for col, val in extra.items():
+            if val and any(h in str(col).lower() for h in hints):
+                return str(val)
+        return ""
+
+    def prepare_research(self, job_id: str, force: bool = False) -> StageOutcome | None:
+        """Build research.json from the calendar's research cell (or Wikipedia if empty).
+
+        Never overwrites research you already have unless ``force``.
+        """
+        p = self.paths(job_id)
+        if p.research.is_file() and not force:
+            return None
+        job = self.studio.job_input(job_id)
+        cell = self.calendar_research_cell(job_id)
+        cfg = self.s.research
+
+        def fn(metrics: StageMetrics) -> dict:
+            metrics.device = "network"
+            r, log_lines = research.build_research(
+                job.topic, cell, cfg.max_sources, cfg.excerpt_chars, cfg.auto_wikipedia)
+            research.save_research(p.research, r)
+            return {"sources": [s.id for s in r.sources], "claims": len(r.claims),
+                    "log": log_lines, "from_calendar": bool(cell)}
+
+        return self._run_stage(job_id, "research", None, fn, lambda: files_hash(p.research))
+
     def set_research(self, job_id: str, research_file: Path) -> Research:
         r = research.load_research(user_file(research_file))
         research.save_research(self.paths(job_id).research, r)
@@ -424,12 +462,14 @@ class Pipeline:
 
     # ======================================================== M4: assets
     def assets(self, job_id: str, pexels: bool | None = None, rebuild: bool = False,
-               ai_images: bool = False, comfy_transport: Any = None) -> StageOutcome:
+               ai_images: bool | None = None, comfy_transport: Any = None) -> StageOutcome:
         if not self.approval_valid(job_id, "script"):
             raise GateError("script is not approved", hint=f"faceless approve-script {job_id}")
         sc = self.require_script(job_id)
         p = self.paths(job_id)
         use_pexels = self.s.stock.pexels_enabled if pexels is None else pexels
+        if ai_images is None:
+            ai_images = self.s.comfyui.enabled and self.s.comfyui.use_by_default
 
         def fn(metrics: StageMetrics) -> dict:
             metrics.device = "cuda" if ai_images else "cpu"
@@ -542,13 +582,49 @@ class Pipeline:
             problems = subtitles.validate_captions(caps, vt.duration, cfg)
             if problems:
                 raise ValidationFailed("caption timing problems: " + "; ".join(problems[:5]))
-            track = CaptionTrack(captions=caps, **track_kw)
+            en_track = CaptionTrack(captions=caps, **track_kw)
+            lang = cfg.burn_language.lower()
+            if lang == "en":
+                track = en_track
+            else:
+                # English captions are kept as captions.en.srt; the burned track is a
+                # sentence-level translation timed to the English narration.
+                write_json(p.captions_dir / "captions.en.json", en_track.model_dump())
+                atomic_write_text(p.captions_dir / "captions.en.srt",
+                                  subtitles.to_srt(en_track.captions))
+                sents = subtitles.sentences_from_words(words)
+                translated, model_used, cached = self._translate(
+                    [t for t, _s, _e in sents], lang, metrics)
+                caps = subtitles.chunk_translated(sents, translated, cfg)
+                problems = subtitles.validate_captions(caps, vt.duration, cfg)
+                if problems:
+                    raise ValidationFailed("translated caption problems: " +
+                                           "; ".join(problems[:5]))
+                track = CaptionTrack(captions=caps, language=lang, translated_by=model_used,
+                                     **track_kw)
+                details.update({"language": lang, "translated_by": model_used,
+                                "sentences": len(sents), "translation_cached": cached})
             self._save_track(job_id, track, sc)
             details.update({"captions": len(caps), "source": track.source})
             return details
 
         return self._run_stage(job_id, "subtitles", self.subtitles_input_hash(job_id), fn,
                                lambda: self.subtitles_output_hash(job_id))
+
+    def _translate(self, sentences: list[str], lang: str, metrics: StageMetrics
+                   ) -> tuple[list[str], str, bool]:
+        """Translate caption sentences with the local LLM, cached by content."""
+        from .providers.llm import OllamaScriptProvider
+        cfg = self.s.llm.model_copy(update={"model": self.s.subtitles.translate_model or
+                                            self.s.llm.model})
+        key = hash_obj({"s": sentences, "lang": lang, "model": cfg.model, "v": 2})
+        cache = self.s.cache_dir / "translate" / f"{key}.json"
+        if cache.is_file():
+            return read_json(cache), cfg.model, True
+        prov = OllamaScriptProvider(cfg, self.s.resources, self.s.locks_dir)
+        out = prov.translate(sentences, lang, metrics)
+        write_json(cache, out)
+        return out, cfg.model, False
 
     def _save_track(self, job_id: str, track: CaptionTrack, sc: Script) -> None:
         p = self.paths(job_id)
@@ -570,6 +646,8 @@ class Pipeline:
             raise ValidationFailed("imported captions invalid:\n  - " + "\n  - ".join(problems))
         prev = self.captions(job_id)
         track = CaptionTrack(source="imported", model=prev.model if prev else "",
+                             language=prev.language if prev else "en",
+                             translated_by=prev.translated_by if prev else "",
                              reviewed=True, captions=caps)
         self._save_track(job_id, track, sc)
         self._record_manual_subtitles(job_id, "import")
@@ -675,6 +753,10 @@ class Pipeline:
             "approximate or divergent timing requires 'faceless subtitles JOB --mark-reviewed'"
             if needs_review and not (tr and tr.reviewed) else
             (f"divergence ratio {tr.divergence_ratio}" if tr and tr.divergence_ratio else "ok"))
+        if tr and tr.translated_by:
+            add(f"machine-translated captions ({tr.language}) read while watching", True,
+                f"translated by {tr.translated_by}; fix wording in the Captions tab",
+                required=False)
         add("final render current", self.stage_fresh(job_id, "render"))
         val = read_json(p.validation) if p.validation.is_file() else None
         add("technical validation passed", bool(val and val["ok"]))
@@ -742,8 +824,12 @@ class Pipeline:
         st = self.effective_state(job_id)
         j = job_id
         if st == JobState.DRAFT:
-            return Gate(j, st, "needs a script", f"faceless draft {j} --script FILE  (or --llm "
-                        "with research)")
+            if self.paths(j).research.is_file() and not self.research(j).sources:
+                return Gate(j, st, "no research found for this topic: add source URLs in "
+                            "the calendar's research column (or with 'faceless research "
+                            "add-source')", f"faceless research add-source {j} …")
+            return Gate(j, st, "needs a script", f"faceless resume {j}  (research + local LLM "
+                        f"draft)  or  faceless draft {j} --script FILE")
         if st == JobState.RESEARCH_REVIEW:
             return Gate(j, st, "script awaits human review",
                         f"faceless review-script {j}; faceless approve-script {j}")
@@ -766,16 +852,35 @@ class Pipeline:
         return Gate(j, st, "exported; publish manually", "", done=True)
 
     def advance(self, job_id: str, on_step: Callable[[str], None] | None = None,
-                stop_before_render: bool = False) -> Gate:
-        """Run automatic (non-review) stages until a human gate. Never approves anything."""
+                stop_before_render: bool = False, auto_draft: bool = True) -> Gate:
+        """Run automatic (non-review) stages until a human gate. Never approves anything.
+
+        With ``auto_draft``, a job without a script gets research (calendar cell or
+        Wikipedia) and a local-LLM draft, then stops at the script review gate.
+        """
         def say(msg: str) -> None:
             if on_step:
                 on_step(msg)
-        for _ in range(10):
+        for _ in range(12):
             gate = self.next_gate(job_id)
             cmd = gate.next_command
             if gate.done:
                 return gate
+            if gate.state == JobState.DRAFT:
+                if not auto_draft:
+                    return gate
+                rpath = self.paths(job_id).research
+                if not rpath.is_file() or not self.research(job_id).sources:
+                    say("research")
+                    self.prepare_research(job_id, force=True)
+                if not self.research(job_id).sources:
+                    return Gate(job_id, JobState.DRAFT, "no research found for this topic: "
+                                "add source URLs in the calendar's research column",
+                                f"faceless research add-source {job_id} …; then faceless "
+                                f"resume {job_id}")
+                say("draft (local LLM)")
+                self.draft(job_id, use_llm=True)
+                continue
             if cmd.startswith(f"faceless voice {job_id}"):
                 say("voice")
                 self.voice(job_id)

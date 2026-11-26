@@ -25,6 +25,9 @@ class FakeComfy:
 
     def __call__(self, req: httpx.Request) -> httpx.Response:
         p = req.url.path
+        if p == "/object_info/CheckpointLoaderSimple":
+            return httpx.Response(200, json={"CheckpointLoaderSimple": {"input": {"required": {
+                "ckpt_name": [["test-sd15.safetensors"], {}]}}}})
         if p == "/prompt":
             self.prompts.append(json.loads(req.content)["prompt"])
             return httpx.Response(200, json={"prompt_id": f"id{len(self.prompts)}"})
@@ -131,3 +134,32 @@ def test_ai_images_recorded_with_provenance(pipeline, short_script, research_fil
     from faceless_studio.library import get_asset
     notes = json.loads(get_asset(pl.studio.db, a.library_id).notes)
     assert notes["model"] == "test-sd15.safetensors" and "seed" in notes
+
+
+def test_unavailable_or_missing_checkpoint_skips_ai_once(pipeline, short_script, research_file,
+                                                         small_limits, png):
+    pl = small_limits(pipeline)
+    pl.s.comfyui = _cfg(checkpoint="other.safetensors")
+    fake = FakeComfy(png)
+    j = pl.studio.create_job("ai test").id
+    pl.draft(j, script_file=short_script, research_file=research_file)
+    pl.approve_script(j, "t")
+    o = pl.assets(j, ai_images=True, comfy_transport=httpx.MockTransport(fake))
+    assert o.details["procedural"] == 3 and fake.prompts == []
+    assert len(o.details["ai_errors"]) == 1 and "not found" in o.details["ai_errors"][0]
+    down = httpx.MockTransport(lambda r: (_ for _ in ()).throw(httpx.ConnectError("refused")))
+    o = pl.assets(j, ai_images=True, rebuild=True, comfy_transport=down)
+    assert "not reachable" in o.details["ai_errors"][0]
+
+
+def test_ai_images_default_from_config(pipeline, short_script, research_file, small_limits,
+                                       png):
+    pl = small_limits(pipeline)
+    pl.s.comfyui = _cfg()
+    fake = FakeComfy(png)
+    j = pl.studio.create_job("ai default test").id
+    pl.draft(j, script_file=short_script, research_file=research_file)
+    pl.approve_script(j, "t")
+    o = pl.assets(j, comfy_transport=httpx.MockTransport(fake))  # ai_images not given
+    assert o.details["ai"] == 3
+    assert "documentary photograph" in fake.prompts[0]["6"]["inputs"]["text"]

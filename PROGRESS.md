@@ -116,6 +116,28 @@ dev container (RTX 4050 visible, NVENC working, Ollama with `qwen3:4b`).
 5. Optional: approve a Chromium download (~150 MB) if you want browser end-to-end tests of the dashboard.
 6. Dev container leftovers from Part 1: Claude Code sign-in and the rebuild-persistence check.
 
+## Update 26 Nov 2026 (afternoon): automatic flow, Italian captions, AI images
+
+Requested by the owner: clean slate, no manual scripts, Italian bottom captions, real
+images, one command + dashboard.
+
+- [x] Cleaned all jobs, the database and uploads (benchmarks in `data/bench` kept); imported `content/faceless_content_365_day_calendar.xlsx` (365 rows, sheet "365-day calendar", columns detected)
+- [x] Research from the calendar's "Research / sources" column (`URL | fact`, one per line); pages fetched (public hosts only, relevant paragraphs); empty cell → Wikipedia lookup (urllib; Wikimedia blocks httpx clients; polite, one bounded retry on 429), weak articles filtered
+- [x] `faceless make --day N|--days A-B|--from/--to|--topic` and `resume`: research → LLM draft → … stopping only at the three approvals; dashboard **Make video** (calendar) and **Run automatically** (job page)
+- [x] Burned-in captions in Italian (`subtitles.burn_language: it`): sentence-level translation by `qwen3:4b`, timed to the English narration, cached; English kept as `captions.en.srt`; export has `JOB.it.srt` and `JOB.en.srt`
+- [x] English scene headline drawn on photos/AI images/clips (top); original graphics keep their own text
+- [x] ComfyUI on by default: SD 1.5 checkpoint downloaded (approved, 4.27 GB) to `models/comfyui/checkpoints/`, mounted read-only into the ComfyUI service (`.devcontainer/compose.yaml`), one reachability/checkpoint check per job, fallback to graphics
+- [~] **AI images not tested live**: the ComfyUI container has not been built/started (needs the host). Tested with a mocked API only.
+- [x] Live checks: Wikipedia lookups (IKEA, Costco, supermarkets); Italian captions with real Kokoro + Whisper + Qwen3 (41 captions, ≥0.66 s each, prices as "9,99 $"); preview render validated
+
+Tests: backend **91 passed** (+1 model test), frontend 5 passed, ruff clean.
+
+Known limitations of this round:
+- Qwen3 4B Italian has small grammar slips (e.g. "die dollari" for "dieci dollari", "il primo cifra"). Correct them in the Captions tab before approving. A dedicated translation model (e.g. MarianMT opus-mt-en-it, ~300 MB) would be more accurate; not installed.
+- Wikipedia is a weak, tertiary source and its search sometimes picks loosely related pages. Calendar URLs give far better scripts.
+- Wikipedia rate-limits anonymous clients (HTTP 429 after many quick lookups).
+- SD 1.5 base images are average quality and look AI-made; first ComfyUI image build downloads several GB on the host.
+
 # Part 1: Dev container
 
 **Update 26 Nov 2026 09:04: `validate.sh` passed on the laptop inside the dev container

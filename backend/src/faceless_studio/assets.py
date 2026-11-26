@@ -66,6 +66,11 @@ def build_manifest(s: Settings, db: Database, paths: JobPaths, script: Script,
         from .providers.images import ComfyUIProvider
         comfy = ComfyUIProvider(s.comfyui, s.resources, s.locks_dir,
                                 s.resolve(s.comfyui.workflow), transport=comfy_transport)
+        ok, why = comfy.available()
+        if not ok:
+            stats["ai_errors"].append(f"all scenes: {why}")
+            log.warning("AI images skipped: %s", why)
+            comfy = None
     scenes_out: list[SceneAsset] = []
     for i, sc in enumerate(script.scenes):
         prev = prev_by_scene.get(sc.id)
@@ -138,9 +143,8 @@ def _pexels_pick(s: Settings, db: Database, pexels, terms: list[str], used: set[
 def _ai_image(s: Settings, db: Database, comfy, paths: JobPaths, sc) -> LibraryAsset:
     from .util import hash_obj
     seed = int(hash_obj([paths.root.name, sc.id, sc.visual])[:8], 16)
-    prompt = ", ".join(x for x in [sc.visual, *sc.search_terms[:3],
-                                   "editorial illustration, clean composition, soft light, "
-                                   "vertical frame, no text"] if x)
+    prompt = ", ".join(x for x in [sc.visual, *sc.search_terms[:3], s.comfyui.style,
+                                   "vertical composition, no text"] if x)
     out = s.cache_dir / "comfyui" / f"{paths.root.name}-{sc.id}-{seed}.png"
     res = comfy.generate(prompt, out, seed)
     return library.add_asset(

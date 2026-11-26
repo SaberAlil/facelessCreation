@@ -126,12 +126,19 @@ def run_checks(s: Settings, probe_encoders: bool = True, network: bool = True) -
             c.append(Check("ollama", "info", f"not reachable at {s.llm.host} (optional)",
                            "manual scripts work without it"))
         if s.comfyui.enabled:
+            ckpt = s.project_root / "models" / "comfyui" / "checkpoints" / s.comfyui.checkpoint
+            c.append(Check("comfyui model", "ok" if ckpt.is_file() else "warn",
+                           f"{s.comfyui.checkpoint} ({s.comfyui.checkpoint_license})",
+                           "" if ckpt.is_file() else f"place it in {ckpt.parent}"))
             try:
                 httpx.get(f"{s.comfyui.host}/system_stats", timeout=5).raise_for_status()
                 c.append(Check("comfyui", "ok", s.comfyui.host))
             except httpx.HTTPError:
-                c.append(Check("comfyui", "warn", f"enabled but not reachable at "
-                               f"{s.comfyui.host}"))
+                c.append(Check("comfyui", "warn", f"not reachable at {s.comfyui.host}: "
+                               "scenes use original graphics",
+                               "on the laptop: docker compose -f .devcontainer/compose.yaml "
+                               "-f .devcontainer/compose.local.yaml --profile comfyui up -d "
+                               "comfyui"))
     import os
     c.append(Check("pexels", "ok" if os.environ.get("PEXELS_API_KEY") else "info",
                    "PEXELS_API_KEY set" if os.environ.get("PEXELS_API_KEY") else

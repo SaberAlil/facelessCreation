@@ -17,7 +17,7 @@ const ACTIONS: { stage: string; label: string; help: string }[] = [
   { stage: 'preview', label: 'Preview 540p', help: 'fast check render' },
   { stage: 'render', label: 'Final render', help: '1080x1920 H.264/AAC' },
   { stage: 'export', label: 'Export', help: 'after final approval' },
-  { stage: 'resume', label: 'Resume to next gate', help: 'runs automatic stages only' },
+  { stage: 'resume', label: 'Run automatically', help: 'everything up to the next approval' },
 ];
 
 @Component({
@@ -35,7 +35,17 @@ const ACTIONS: { stage: string; label: string; help: string }[] = [
           ({{ d.timing.provider }}{{ d.timing.demo ? ', DEMO' : '' }})</span> }
       </div>
       <div class="notice">
-        <b>Next:</b> {{ d.gate.reason }}
+        <div class="row">
+          <span><b>Next:</b> {{ d.gate.reason }}</span>
+          @if (!d.gate.done && !isApproval(d.gate.reason)) {
+            <button class="primary" (click)="run('resume')" [disabled]="busy()">
+              Run automatically to the next approval</button>
+          }
+          @if (isApproval(d.gate.reason)) {
+            <span class="small">→ open the <b>{{ approvalTab(d.gate.reason) }}</b> tab to review and approve,
+              then press "Run automatically" again.</span>
+          }
+        </div>
         @if (d.job.failed_stage) { <div class="bad small">Last {{ d.job.failed_stage }} run failed: {{ d.job.error }}</div> }
       </div>
       @if (task(); as t) {
@@ -130,6 +140,14 @@ export class JobPage implements OnDestroy {
   ngOnDestroy() { if (this.timer) clearTimeout(this.timer); }
 
   keys(o: Record<string, boolean>) { return Object.keys(o); }
+
+  isApproval(reason: string) { return /review|approval/i.test(reason); }
+
+  approvalTab(reason: string) {
+    if (/script/i.test(reason)) return 'Script & research';
+    if (/asset|rights/i.test(reason)) return 'Assets';
+    return 'Preview, review & export';
+  }
 
   async refresh() {
     try {

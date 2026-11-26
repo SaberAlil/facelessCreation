@@ -12,7 +12,14 @@ This is engineering documentation, not legal advice.
 | `Systran/faster-whisper-small.en` (rev `d1d751a5f8`) | caption timing | MIT | yes | Conversion of OpenAI Whisper (MIT). `base.en` fallback is also MIT. |
 | `qwen3:4b` via Ollama (Q4_K_M) | optional script drafts | Apache-2.0 | yes | Drafts are flagged for human fact-checking; the model is not a source. |
 | spaCy `en_core_web_sm` 3.8.0 | Kokoro text processing (misaki) | MIT | yes | **Installed automatically by misaki on first Kokoro run** (12.8 MB pip download). |
-| Stable Diffusion checkpoint (optional) | AI images via ComfyUI | **you choose** | depends | Not installed. Most SD 1.5 checkpoints use CreativeML OpenRAIL-M (use restrictions apply). Record it in `comfyui.checkpoint_license` and set `checkpoint_commercial_use: true` only after reading it. |
+| `stable-diffusion-v1-5/stable-diffusion-v1-5` → `v1-5-pruned-emaonly.safetensors` (4.27 GB, sha256 `6ce01616…fa2fa`, repo rev `451f4fe161`) | AI images via ComfyUI | CreativeML OpenRAIL-M | yes, with use restrictions | Downloaded 26 Nov 2026 with approval into `models/comfyui/checkpoints/`. The license forbids e.g. deceptive, defamatory or harmful uses and impersonation; outputs are AI-generated and are labelled as such in the export. |
+
+## Research data
+
+| Source | License | How it is used |
+|---|---|---|
+| English Wikipedia (API, only when the calendar's research cell is empty) | CC BY-SA 4.0 text | Short excerpts are passed to the local LLM as background; they are not reproduced in videos. Claims built on them stay flagged until you check them. |
+| Pages you list in the calendar | the publisher's terms | Fetched once (public pages only, bounded size) to give the LLM relevant paragraphs. |
 
 ## Programs invoked as separate processes
 

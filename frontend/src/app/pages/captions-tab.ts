@@ -9,7 +9,9 @@ import { Api, Caption, CaptionsView, errorText } from '../api';
     @if (error()) { <div class="error">{{ error() }}</div> }
     @if (v()?.track; as t) {
       <div class="row small">
-        <span class="pill">source: {{ t.source }} {{ t.model }}</span>
+        <span class="pill">burned-in language: {{ t.language }}</span>
+        @if (t.translated_by) { <span class="pill">translated by {{ t.translated_by }} from the English narration</span> }
+        <span class="pill">timing: {{ t.source }} {{ t.model }}</span>
         @if (t.divergence_ratio !== null) { <span class="pill">script match {{ (t.divergence_ratio * 100).toFixed(1) }}%</span> }
         @if (t.approximate) { <span class="pill warn">approximate timing</span> }
         <span class="pill" [class.ok]="t.reviewed">{{ t.reviewed ? 'reviewed' : 'not reviewed' }}</span>

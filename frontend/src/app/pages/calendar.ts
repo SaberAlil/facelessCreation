@@ -22,24 +22,31 @@ import { Api, CalendarRow, errorText } from '../api';
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Day</th><th>Date</th><th>Topic</th><th>Job</th></tr></thead>
+        <thead><tr><th>Day</th><th>Date</th><th>Topic</th><th>Research</th><th>Video</th></tr></thead>
         <tbody>
           @for (r of rows(); track r.day) {
             <tr>
               <td>{{ r.day }}</td>
               <td>{{ r.date ?? '' }}</td>
               <td>{{ r.topic }}</td>
+              <td class="small" [title]="research(r)">
+                @if (research(r)) { <span class="ok">✓ {{ links(r) }} link(s)</span> }
+                @else { <span class="muted">Wikipedia</span> }
+              </td>
               <td>
-                @if (r.job) {
-                  <a [routerLink]="['/jobs', r.job.id]">open</a>
-                  <span class="pill {{ r.job.state }}">{{ r.job.state }}</span>
-                } @else {
-                  <button (click)="create(r)" [disabled]="busy()">Create job</button>
-                }
+                <div class="row">
+                  @if (r.job) {
+                    <a [routerLink]="['/jobs', r.job.id]">open</a>
+                    <span class="pill {{ r.job.state }}">{{ r.job.state }}</span>
+                  }
+                  <button class="primary" (click)="make(r)" [disabled]="busy()"
+                    title="Research → AI script → stops for your script approval; press again after each approval">
+                    {{ r.job ? 'Continue' : 'Make video' }}</button>
+                </div>
               </td>
             </tr>
           } @empty {
-            <tr><td colspan="4" class="muted">No calendar rows. Import a file above.</td></tr>
+            <tr><td colspan="5" class="muted">No calendar rows. Import a file above.</td></tr>
           }
         </tbody>
       </table>
@@ -82,11 +89,20 @@ export class CalendarPage {
     finally { this.busy.set(false); }
   }
 
-  async create(r: CalendarRow) {
+  research(r: CalendarRow): string {
+    const key = Object.keys(r.extra ?? {}).find((k) => /research|source/i.test(k));
+    return key ? String(r.extra[key] ?? '') : '';
+  }
+
+  links(r: CalendarRow): number {
+    return (this.research(r).match(/https?:\/\//g) ?? []).length;
+  }
+
+  async make(r: CalendarRow) {
     this.busy.set(true);
     try {
-      const j = await this.api.createJob({ day: r.day });
-      await this.router.navigate(['/jobs', j.id]);
+      const t = await this.api.make({ day: r.day });
+      await this.router.navigate(['/jobs', t.job_id]);
     } catch (e) { this.error.set(errorText(e)); }
     finally { this.busy.set(false); }
   }

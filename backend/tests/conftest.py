@@ -22,6 +22,10 @@ def settings(tmp_path: Path):
         "FACELESS__PATHS__DATA_DIR": str(tmp_path / "data"),
         "FACELESS__RENDER__ENCODER": "libx264",
         "FACELESS__LLM__HOST": "http://ollama.test",
+        # hermetic defaults; ComfyUI and caption translation have their own tests
+        "FACELESS__COMFYUI__ENABLED": "false",
+        "FACELESS__SUBTITLES__BURN_LANGUAGE": "en",
+        "FACELESS__RESEARCH__AUTO_WIKIPEDIA": "false",
     }
     return load_settings(root=REPO, environ=env)
 

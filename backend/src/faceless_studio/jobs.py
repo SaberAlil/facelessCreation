@@ -206,6 +206,13 @@ class Studio:
         log.info("created job %s", job_id)
         return job
 
+    def create_from_calendar(self, row: dict[str, Any], notes: str = "") -> JobInput:
+        """Job for a calendar row; keeps the whole row (incl. research cell) as reference."""
+        ref = {"source_file": row.get("source_file"), "sheet": row.get("source_sheet"),
+               "row": row.get("source_row"), "original_topic": row.get("original_topic"),
+               "extra": row.get("extra") or {}}
+        return self.create_job(row["topic"], row["day"], row.get("date"), ref, notes)
+
     def get_job(self, job_id: str) -> dict[str, Any]:
         validate_job_id(job_id)
         row = self.db.one("SELECT * FROM jobs WHERE id = ?", (job_id,))

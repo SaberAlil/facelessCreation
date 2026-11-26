@@ -90,6 +90,10 @@ class SubtitleConfig(_Section):
     margin_l: int = 90
     margin_r: int = 170  # right-side action buttons
     divergence_ratio_warn: float = 0.9
+    # Language of the burned-in captions. "en" = the narration itself; anything else is a
+    # sentence-by-sentence translation by the local LLM, timed to the English narration.
+    burn_language: str = "it"
+    translate_model: str = ""  # empty = llm.model
 
 
 class RenderConfig(_Section):
@@ -108,6 +112,7 @@ class RenderConfig(_Section):
     loudness_lufs: float = -14.0
     true_peak_db: float = -1.0
     music_volume_db: float = -22.0
+    overlay_on_media: bool = True  # draw the scene's overlay text on photos/AI images/clips
     motion_zoom: float = 0.10
     fit_mode: Literal["auto", "crop", "pad"] = "auto"
     min_duration_s: float = 45.0
@@ -125,6 +130,16 @@ class ResourceConfig(_Section):
     sample_interval_s: float = 1.0
 
 
+class ResearchConfig(_Section):
+    # Name fragments used to find the research column in the calendar.
+    calendar_column_hints: list[str] = Field(default_factory=lambda: ["research", "source"])
+    # With no research in the calendar, look the topic up on English Wikipedia (free API)
+    # as a starting source. Its claims stay flagged for your fact-check.
+    auto_wikipedia: bool = True
+    max_sources: int = 4
+    excerpt_chars: int = 1500
+
+
 class StockConfig(_Section):
     pexels_enabled: bool = False
     max_download_mb: int = 80
@@ -133,12 +148,15 @@ class StockConfig(_Section):
 
 
 class ComfyConfig(_Section):
-    enabled: bool = False
-    host: str = "http://127.0.0.1:8188"
+    enabled: bool = True
+    use_by_default: bool = True  # every scene gets an AI image unless a library clip matches
+    host: str = "http://comfyui:8188"  # compose service name, seen from the dev container
     workflow: str = "config/comfyui/sd15_portrait.json"
-    checkpoint: str = ""
-    checkpoint_license: str = ""
-    checkpoint_commercial_use: bool = False  # set true only after reading the license
+    checkpoint: str = "v1-5-pruned-emaonly.safetensors"
+    checkpoint_license: str = "CreativeML OpenRAIL-M (stable-diffusion-v1-5)"
+    checkpoint_commercial_use: bool = True  # OpenRAIL-M allows commercial use of outputs
+    style: str = ("documentary photograph, natural light, realistic, 35mm, sharp focus, "
+                  "high detail")
     width: int = 512
     height: int = 768
     steps: int = 20
@@ -162,6 +180,7 @@ class Settings(_Section):
     subtitles: SubtitleConfig = Field(default_factory=SubtitleConfig)
     render: RenderConfig = Field(default_factory=RenderConfig)
     resources: ResourceConfig = Field(default_factory=ResourceConfig)
+    research: ResearchConfig = Field(default_factory=ResearchConfig)
     stock: StockConfig = Field(default_factory=StockConfig)
     comfyui: ComfyConfig = Field(default_factory=ComfyConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)

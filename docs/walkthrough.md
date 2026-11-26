@@ -1,5 +1,11 @@
 # Walkthrough: one video, then a weekly batch
 
+> **Short version.** Fill the calendar's "Research / sources" column (`https://… | fact`,
+> one per line), import it, start ComfyUI on the laptop, then run `faceless make --day N`
+> (or press **Make video** in the dashboard). It stops three times for your approval:
+> script, images, final video. Run it again after each approval. The sections below
+> explain every step and the manual alternatives.
+
 All commands run inside the dev container from the repository root. Replace `JOB` with
 the id that `faceless new` prints (any unique prefix works). Every command that is
 blocked tells you why and prints the next command.

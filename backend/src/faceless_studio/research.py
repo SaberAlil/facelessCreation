@@ -19,7 +19,7 @@ import httpx
 from pydantic import ValidationError
 
 from .config import ScriptConfig
-from .schemas import Research, Script, Source
+from .schemas import Research, ResearchClaim, Script, Source
 from .util import FacelessError, ValidationFailed, read_json, word_count, write_json
 
 
@@ -151,43 +151,318 @@ def _public_host(host: str) -> None:
             raise FacelessError(f"refusing non-public address {ip} for {host}")
 
 
-def fetch_source(url: str, source_id: str, timeout: float = 20.0) -> Source:
-    """Fetch a public page's title and a short excerpt as a research *candidate*.
+def _get_public(client: httpx.Client, url: str, max_redirects: int = 3) -> httpx.Response:
+    """GET with redirects followed manually, re-checking every hop is a public host."""
+    for _ in range(max_redirects + 1):
+        u = urlparse(url)
+        if u.scheme not in ("http", "https") or not u.hostname:
+            raise FacelessError("only http(s) URLs are supported")
+        _public_host(u.hostname)
+        r = client.get(url)
+        if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
+            url = str(httpx.URL(url).join(r.headers["location"]))
+            continue
+        return r
+    raise FacelessError("too many redirects")
 
-    The excerpt is untrusted data for the human researcher; it is never sent to the
-    LLM as instructions. No redirects to other hosts, no paywall circumvention.
+
+def _paragraphs_from_html(text: str) -> list[str]:
+    text = re.sub(r"(?is)<(script|style|noscript|nav|header|footer|aside|form).*?</\1>", " ",
+                  text)
+    paras = re.findall(r"(?is)<p[^>]*>(.*?)</p>", text) or [text]
+    out = []
+    for p in paras:
+        t = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", p)).split())
+        if len(t) >= 60:
+            out.append(t)
+    return out
+
+
+_STOP = {"why", "how", "what", "the", "a", "an", "of", "and", "to", "in", "on", "for", "do",
+         "does", "is", "are", "so", "use", "uses", "make", "makes", "with", "from", "its",
+         "can", "who", "when", "where", "which", "your", "you", "they", "them", "their", "it",
+         "be", "about", "into", "over", "under", "like", "just", "often", "some", "more",
+         "less", "than", "actually", "really", "many", "much", "get", "gets", "most", "still",
+         "matter", "matters", "means", "mean", "work", "works", "way", "ways", "behind",
+         "explained", "every", "everyday", "need", "needs", "keep", "keeps",
+         "people", "thing", "things", "teaches", "year"}
+
+
+def topic_terms(topic: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", topic.lower()) if w not in _STOP and len(w) > 2}
+
+
+def relevant_excerpt(paragraphs: list[str], topic: str, max_chars: int) -> str:
+    """Pick the paragraphs that cover the topic's *specific* words, in document order.
+
+    Words found in most paragraphs (e.g. "IKEA" in the IKEA article) carry little weight;
+    rarer topic words ("showroom", "path") decide which paragraphs are relevant.
     """
-    u = urlparse(url)
-    if u.scheme not in ("http", "https") or not u.hostname:
-        raise FacelessError("only http(s) URLs are supported")
-    _public_host(u.hostname)
-    headers = {"User-Agent": "FacelessStudio/0.1 (research helper)"}
-    with httpx.Client(timeout=timeout, follow_redirects=False, headers=headers) as client, \
-            client.stream("GET", url) as r:
-        if r.status_code in (301, 302, 303, 307, 308):
-            raise FacelessError(f"redirected to {r.headers.get('location')}; add that URL "
-                                "instead after checking it")
+    import math
+
+    terms = topic_terms(topic)
+    low = [p.lower() for p in paragraphs]
+    n = max(1, len(paragraphs))
+    df = {t: sum(1 for p in low if t in p) for t in terms}
+    weight = {t: math.log((n + 1) / (df[t] + 0.5)) for t in terms if df[t]}
+    scored = [(sum(w for t, w in weight.items() if t in p), i, paragraphs[i])
+              for i, p in enumerate(low)]
+    best = sorted(scored, key=lambda x: (-x[0], x[1]))
+    chosen, total = [], 0
+    for score, i, p in best:
+        if total and score <= 0:
+            break
+        if total + len(p) > max_chars:
+            if not chosen:
+                chosen.append((i, p[:max_chars]))
+            continue
+        chosen.append((i, p))
+        total += len(p) + 1
+    return " ".join(p for _i, p in sorted(chosen))[:max_chars]
+
+
+def fetch_source(url: str, source_id: str, timeout: float = 20.0, topic: str = "",
+                 max_chars: int = 1500, transport: httpx.BaseTransport | None = None) -> Source:
+    """Fetch a public page's title and the paragraphs most relevant to the topic.
+
+    The excerpt is untrusted data: the LLM receives it inside a research block marked as
+    data, never as instructions. Public hosts only (checked on every redirect hop),
+    bounded size, no paywall circumvention.
+    """
+    headers = {"User-Agent": "FacelessStudio/0.1 (local research helper)"}
+    with httpx.Client(timeout=timeout, follow_redirects=False, headers=headers,
+                      transport=transport) as client:
+        r = _get_public(client, url)
         if r.status_code in (401, 402, 403):
-            raise FacelessError(f"access restricted (HTTP {r.status_code}); add the source "
-                                "manually if you have legitimate access")
+            raise FacelessError(f"access restricted (HTTP {r.status_code}); add the facts "
+                                "yourself if you have legitimate access")
         r.raise_for_status()
         ctype = r.headers.get("content-type", "")
         if "html" not in ctype and "text" not in ctype:
             raise FacelessError(f"unsupported content type {ctype!r}")
-        body = b""
-        for chunk in r.iter_bytes():
-            body += chunk
-            if len(body) > MAX_FETCH_BYTES:
-                break
+        body = r.content[:MAX_FETCH_BYTES]
     text = body.decode(r.encoding or "utf-8", errors="replace")
     m = re.search(r"<title[^>]*>(.*?)</title>", text, re.S | re.I)
-    title = html.unescape(m.group(1)).strip() if m else u.hostname
-    body_text = re.sub(r"(?is)<(script|style|noscript).*?</\1>", " ", text)
-    body_text = html.unescape(re.sub(r"<[^>]+>", " ", body_text))
-    excerpt = " ".join(body_text.split())[:1200]
-    return Source(id=source_id, url=url, title=title[:300], publisher=u.hostname,
+    host = urlparse(str(r.url)).hostname or ""
+    title = " ".join(html.unescape(m.group(1)).split()) if m else host
+    excerpt = relevant_excerpt(_paragraphs_from_html(text), topic, max_chars)
+    return Source(id=source_id, url=url, title=title[:300] or host, publisher=host,
                   accessed=date.today().isoformat(), excerpt=excerpt,
                   notes="Fetched automatically: verify publication date and content.")
+
+
+WIKI_API = "https://en.wikipedia.org/w/api.php"
+WIKI_UA = "FacelessStudio/0.1 (local research helper)"
+
+
+def _wiki_get(params: dict, timeout: float) -> dict:
+    """Wikipedia API call. Uses urllib: Wikimedia's bot filter rejects httpx clients.
+
+    Polite: a short pause before every call and one bounded retry on HTTP 429.
+    """
+    import json
+    import time
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    req = urllib.request.Request(f"{WIKI_API}?{urllib.parse.urlencode(params)}",  # noqa: S310
+                                 headers={"User-Agent": WIKI_UA})
+    for attempt in range(2):
+        time.sleep(0.5)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 (fixed host)
+                return json.loads(r.read(MAX_FETCH_BYTES))
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt == 0:
+                wait = min(15.0, float(e.headers.get("Retry-After") or 5))
+                time.sleep(wait)
+                continue
+            raise FacelessError(f"Wikipedia request failed: HTTP {e.code}") from e
+        except OSError as e:
+            raise FacelessError(f"Wikipedia request failed: {e}") from e
+    raise FacelessError("Wikipedia rate limit")
+
+
+def _stem(w: str) -> str:
+    return w[:-1] if len(w) > 4 and w.endswith("s") else w
+
+
+def is_relevant(title: str, excerpt: str, terms: set[str]) -> bool:
+    """Title shares a topic word, or the excerpt uses at least 3 distinct topic words."""
+    stems = {_stem(t) for t in terms}
+    title_words = {_stem(w) for w in re.findall(r"[a-z0-9]+", title.lower())}
+    text = excerpt.lower()
+    distinct = sum(1 for st in stems if st in text)
+    return bool(stems & title_words) and distinct >= 1 or distinct >= 3
+
+
+def wiki_queries(topic: str) -> list[str]:
+    """Search queries from specific to broad (Wikipedia search requires every word)."""
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", topic)
+    proper = [w for i, w in enumerate(words) if i > 0 and (w[0].isupper() or w.isupper())]
+    terms = sorted(topic_terms(topic), key=len, reverse=True)
+    queries = [" ".join(terms), " ".join([*proper, *terms[:1]]), " ".join(proper),
+               " ".join(terms[:2]), terms[0] if terms else topic]
+    return list(dict.fromkeys(q for q in queries if q.strip()))
+
+
+def wikipedia_sources(topic: str, max_articles: int = 2, max_chars: int = 1500,
+                      timeout: float = 20.0, max_queries: int = 4) -> list[Source]:
+    """Find English Wikipedia articles for the topic and keep their relevant paragraphs.
+
+    One request per query (search + article text together). A starting point only:
+    Wikipedia is a tertiary source, so every claim built on it stays flagged for human
+    checking against the primary sources it cites.
+    """
+    terms = topic_terms(topic)
+    out: list[Source] = []
+    seen: set[str] = set()
+    for query in wiki_queries(topic)[:max_queries]:
+        if len(out) >= max_articles:
+            break
+        data = _wiki_get({"action": "query", "generator": "search", "gsrsearch": query,
+                          "gsrlimit": 1, "prop": "extracts|info", "explaintext": 1,
+                          "inprop": "url", "redirects": 1, "format": "json"}, timeout)
+        for page in data.get("query", {}).get("pages", {}).values():
+            title = page.get("title", "")
+            if not title or title in seen:
+                continue
+            seen.add(title)
+            paras = [p.strip() for p in (page.get("extract") or "").split("\n")
+                     if len(p.strip()) >= 60 and not p.startswith("=")]
+            excerpt = relevant_excerpt(paras, topic, max_chars)
+            if not is_relevant(title, excerpt, terms):
+                continue
+            out.append(Source(
+                id=f"W{len(out) + 1}", url=page.get("fullurl") or
+                f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}",
+                title=f"{title} (Wikipedia)", publisher="Wikipedia",
+                accessed=date.today().isoformat(), excerpt=excerpt,
+                notes="Found automatically on Wikipedia: check claims against the primary "
+                      "sources the article cites."))
+    return out
+
+
+def fetch_wikipedia_url(url: str, sid: str, topic: str = "", max_chars: int = 1500) -> Source:
+    """Read a Wikipedia article through the API (the site blocks automated page loads)."""
+    from urllib.parse import unquote
+    title = unquote(urlparse(url).path.split("/wiki/", 1)[-1]).replace("_", " ")
+    data = _wiki_get({"action": "query", "prop": "extracts|info", "explaintext": 1,
+                      "inprop": "url", "redirects": 1, "format": "json", "titles": title}, 20)
+    page = next(iter(data.get("query", {}).get("pages", {}).values()), {})
+    if "missing" in page or not page.get("extract"):
+        raise FacelessError(f"Wikipedia article not found: {title}")
+    paras = [p.strip() for p in page["extract"].split("\n")
+             if len(p.strip()) >= 60 and not p.startswith("=")]
+    return Source(id=sid, url=page.get("fullurl") or url,
+                  title=f"{page.get('title', title)} (Wikipedia)", publisher="Wikipedia",
+                  accessed=date.today().isoformat(),
+                  excerpt=relevant_excerpt(paras, topic, max_chars) or " ".join(paras)[:max_chars],
+                  notes="Wikipedia: check claims against the primary sources it cites.")
+
+
+def fetch_doi(url: str, sid: str, topic: str = "", max_chars: int = 1500) -> Source:
+    """Paper metadata (and abstract when published) from Crossref; publisher sites block
+    automated access."""
+    import json
+    import urllib.parse
+    import urllib.request
+
+    doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", url, flags=re.I)
+    api = f"https://api.crossref.org/works/{urllib.parse.quote(doi, safe='/')}"
+    req = urllib.request.Request(api, headers={"User-Agent": WIKI_UA})  # noqa: S310
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:  # noqa: S310 (fixed https host)
+            m = json.loads(r.read(MAX_FETCH_BYTES))["message"]
+    except OSError as e:
+        raise FacelessError(f"Crossref lookup failed for {doi}: {e}") from e
+    title = " ".join(m.get("title") or []) or doi
+    journal = " ".join(m.get("container-title") or [])
+    year = ((m.get("published") or m.get("issued") or {}).get("date-parts") or [[None]])[0][0]
+    authors = ", ".join(f"{a.get('given', '')} {a.get('family', '')}".strip()
+                        for a in (m.get("author") or [])[:3])
+    abstract = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", m.get("abstract") or "")).split())
+    abstract = re.sub(r"^(Abstract|Purpose)\s*", "", abstract)
+    excerpt = (f"Peer-reviewed article: \"{title}\" by {authors or 'unknown authors'}, "
+               f"{journal} ({year}). ") + (f"Abstract: {abstract}" if abstract else
+                                           "No abstract available: use the title only.")
+    return Source(id=sid, url=url, title=title[:300], publisher=journal[:200],
+                  published=str(year or ""), accessed=date.today().isoformat(),
+                  excerpt=excerpt[:max_chars],
+                  notes="Metadata from Crossref; read the paper before relying on details.")
+
+
+def fetch_any(url: str, sid: str, topic: str = "", max_chars: int = 1500) -> Source:
+    host = (urlparse(url).hostname or "").lower()
+    if host.endswith("wikipedia.org") and "/wiki/" in url:
+        return fetch_wikipedia_url(url, sid, topic, max_chars)
+    if host in ("doi.org", "dx.doi.org"):
+        return fetch_doi(url, sid, topic, max_chars)
+    return fetch_source(url, sid, topic=topic, max_chars=max_chars)
+
+
+_URL = re.compile(r"https?://\S+")
+
+
+def parse_research_cell(cell: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """Calendar research cell → ([(url, fact)], [notes]).
+
+    One item per line (Alt+Enter in Excel) or separated by ';':
+    ``https://… | what this source says`` · ``https://…`` · any other text = a note.
+    """
+    links: list[tuple[str, str]] = []
+    notes: list[str] = []
+    for raw in re.split(r"[\r\n]+|\s;\s|;(?=\s*https?://)", cell or ""):
+        line = raw.strip().strip("•-* ").strip()
+        if not line:
+            continue
+        m = _URL.search(line)
+        if m:
+            url = m.group(0).rstrip(").,]")
+            rest = (line[: m.start()] + line[m.end():]).strip(" |:-–")
+            links.append((url, rest))
+        else:
+            notes.append(line)
+    return links, notes
+
+
+def build_research(topic: str, cell: str, max_sources: int = 4, excerpt_chars: int = 1500,
+                   auto_wikipedia: bool = True, fetch=None, wiki=wikipedia_sources
+                   ) -> tuple[Research, list[str]]:
+    """Research for a job from the calendar cell (or Wikipedia when it is empty)."""
+    fetch = fetch or fetch_any
+    log: list[str] = []
+    links, notes = parse_research_cell(cell)
+    sources: list[Source] = []
+    claims: list[ResearchClaim] = []
+    for i, (url, fact) in enumerate(links[:max_sources], 1):
+        sid = f"S{i}"
+        try:
+            src = fetch(url, sid, topic=topic, max_chars=excerpt_chars)
+            log.append(f"{sid}: fetched {url}")
+        except (FacelessError, httpx.HTTPError) as e:
+            src = Source(id=sid, url=url, title=urlparse(url).hostname or url,
+                         publisher=urlparse(url).hostname or "", accessed=date.today().isoformat(),
+                         notes=f"Could not fetch automatically ({e}); only your notes are used.")
+            log.append(f"{sid}: could not fetch {url}: {e}")
+        sources.append(src)
+        if fact:
+            # Facts you typed next to a source in your own calendar are your research.
+            claims.append(ResearchClaim(id=f"R{len(claims) + 1}", text=fact, source_ids=[sid],
+                                        verified=True))
+    if not sources and auto_wikipedia:
+        try:
+            sources = wiki(topic, max_chars=excerpt_chars)
+            log.append(f"no research in the calendar: found {len(sources)} Wikipedia article(s)")
+        except (FacelessError, httpx.HTTPError) as e:
+            log.append(f"Wikipedia lookup failed: {e}")
+    note = "Research built automatically from the calendar"
+    if not links:
+        note += " (empty research cell; Wikipedia used as a starting point)"
+    if notes:
+        note += ". Your notes: " + " | ".join(notes)
+    return Research(topic=topic, sources=sources, claims=claims, notes=note[:3000]), log
 
 
 def research_template(topic: str) -> Research:
