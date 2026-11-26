@@ -1,6 +1,109 @@
 # facelessCreation
 A web application that allow users to create faceless videos
 
+## Faceless Studio: quick start
+
+A local pipeline that turns a researched topic into an original, narrated 1080x1920
+documentary short for YouTube Shorts, TikTok and Instagram Reels. Everything runs on
+this machine: Kokoro narration (CPU), faster-whisper captions (CPU), FFmpeg rendering
+(NVENC, libx264 fallback), optional Qwen3 drafts via Ollama. No paid APIs, no uploads.
+Humans approve the research/script, the asset rights and the final video; nothing is
+ever approved or published automatically.
+
+```bash
+# one-time (inside the dev container)
+pip install -r backend/requirements.txt        # done by setup.sh on container creation
+bash .devcontainer/install-ai-deps.sh          # CPU torch + kokoro + faster-whisper (~2 GB venv)
+faceless doctor                                # checks tools, encoders, models, disk, GPU
+
+# one video from a calendar day, using the sample script and research
+faceless calendar import content/samples/calendar.csv
+faceless new --day 1
+faceless draft JOB --script content/samples/day-001-script.md \
+                   --research content/samples/day-001-research.json
+faceless review-script JOB
+faceless approve-script JOB --acknowledge-flags   # only after you fact-checked the claims
+faceless voice JOB                                # Kokoro, CPU; first run downloads ~330 MB
+faceless assets JOB
+faceless review-assets JOB --confirm-all --approve
+faceless subtitles JOB                            # first run downloads whisper small.en
+faceless render JOB --preview                     # 540x960 check
+faceless render JOB                               # 1080x1920, 30 fps, H.264/AAC
+faceless review JOB
+faceless approve-final JOB
+faceless export JOB                               # → data/jobs/JOB/export/
+```
+
+`JOB` is the id printed by `faceless new`; a unique prefix works. `faceless status JOB`
+shows the state, what is current, and the exact next command; `faceless resume JOB` runs
+the automatic stages up to the next human review gate.
+
+Full step-by-step guide, including a seven-day batch and every review action:
+[docs/walkthrough.md](docs/walkthrough.md).
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `doctor [--no-network] [--json]` | Tools, filters, real NVENC probe, fonts, models, RAM/VRAM/disk, Ollama/Pexels/ComfyUI |
+| `config` | Effective configuration (defaults + `config/local.yaml` + `FACELESS__…` env vars) |
+| `calendar import FILE [--sheet S] [--topic-col C] [--date-col C] [--day-col C] [--replace] [--dry-run]` | CSV/XLSX import; rejects duplicate days/dates/topics and empty topics |
+| `calendar list [--from-day N] [--to-day N]` | Calendar with job state per day |
+| `new --day N \| --date YYYY-MM-DD \| --topic TEXT` | Create a job (one job per calendar day) |
+| `list [--state S]`, `status JOB [--json]`, `resume JOB` | Inspect / continue jobs |
+| `research init\|add-source\|add-claim\|verify\|fetch\|show JOB …` | Record sources and claims; `fetch` reads a public page's title/excerpt (bounded, no private hosts) |
+| `draft JOB --script FILE \| --text TEXT \| --llm [--research FILE]` | Manual script (`.md`/`.txt`/`.json`) or a local Qwen3 draft from the research |
+| `review-script JOB`, `approve-script JOB [--acknowledge-flags] [--yes]` | Show flags; approve (records hashes) |
+| `voice JOB [--provider kokoro\|espeak] [--narration FILE]` | Narration + real per-scene timing (espeak = demo only) |
+| `library add FILE --license L --commercial-use … `, `library add-manifest`, `list`, `remove` | Your licensed media with provenance |
+| `assets JOB [--pexels] [--ai-images] [--rebuild]` | Visual per scene: library match → Pexels → ComfyUI → original graphic |
+| `assets JOB --scene S --use LIB_ID \| --procedural [--overlay T]`, `assets JOB --music LIB_ID\|none` | Manual replacement / music |
+| `review-assets JOB [--confirm IDS\|--confirm-all] [--reject IDS] [--approve]` | Rights review and approval |
+| `subtitles JOB [--model base.en] [--approximate] [--import FILE.srt] [--mark-reviewed]` | Whisper timing on the script text; corrections; review |
+| `render JOB [--preview] [--dry-run] [--encoder h264_nvenc\|libx264]`, `preview JOB` | Render + validation (ffprobe, decode, loudness, faststart) |
+| `review JOB`, `approve-final JOB`, `export JOB` | Final checklist, approval, export package |
+| `batch --from D --to D \| --days 1-7 [--limit N] [--dry-run] [--llm] [--research-dir DIR] [--no-resume] [--concurrency 1]` | Prepare several days; stops at review gates |
+| `tracking export [FILE]` | CSV for links/analytics you enter by hand (keeps your edits) |
+| `cache stats`, `cache clean [--max-gb N] [--dry-run]`, `gpu` | Disk usage, LRU cleanup, GPU lock/memory |
+
+Exit codes: 0 ok, 1 error, 3 not found, 4 blocked by a review gate, 5 validation failed,
+6 provider unavailable, 7 tool failed, 8 resources (RAM/VRAM/GPU lock).
+
+### Dashboard (optional)
+
+```bash
+uvicorn faceless_studio.api:app --host 127.0.0.1 --port 8000   # or the VS Code launch config
+cd frontend && npx ng serve --port 4200                          # http://localhost:4200
+```
+
+Calendar, jobs, script/research editing, asset rights review with previews, caption
+editing, preview/final players, checklists, approvals (type APPROVE) and export. The API
+listens on loopback only and rejects requests without the `X-Faceless` header or with a
+non-local Host header. Long stages run one at a time in a single server-side worker.
+
+### Where things live
+
+| Path | Content |
+|---|---|
+| `backend/` | Python package `faceless_studio` (CLI, pipeline, API) and tests |
+| `frontend/` | Angular dashboard |
+| `config/default.yaml` | All settings; override in `config/local.yaml` (git-ignored) |
+| `content/` | Calendars, research and scripts you write (`content/samples/` has examples) |
+| `data/jobs/JOB/` | One folder per job: `script.json`, `research.json`, `voice/`, `assets/`, `captions/`, `render/`, `export/`, `logs/` |
+| `data/library/`, `data/cache/`, `data/db/` | Licensed media, TTS/stock caches, SQLite state |
+
+### Tests
+
+```bash
+cd backend && pytest -q                 # 79 unit + FFmpeg integration tests (no models needed)
+cd backend && pytest -q -m models       # real Kokoro + faster-whisper
+cd frontend && npx ng test --watch=false
+python backend/scripts/benchmark.py --videos 7   # machine-time benchmark in data/bench
+```
+
+Hardware measurements: [HARDWARE.md](HARDWARE.md). Licenses: [LICENSES.md](LICENSES.md).
+Status and limitations: [PROGRESS.md](PROGRESS.md).
+
 ## Development environment
 
 The app is developed inside a VS Code dev container with GPU support. It runs

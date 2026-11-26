@@ -1,0 +1,59 @@
+{
+  "topic": "Why prices end in 99",
+  "notes": "SAMPLE research written by Claude Code for the pipeline test. The publications below exist to the best of the author's knowledge, but no human has checked them against the script yet. Every claim is unverified on purpose: verify each one (and add S2's DOI) before publishing.",
+  "sources": [
+    {
+      "id": "S1",
+      "url": "https://doi.org/10.1086/429600",
+      "title": "Penny Wise and Pound Foolish: The Left-Digit Effect in Price Cognition",
+      "publisher": "Journal of Consumer Research 32(1), Thomas & Morwitz",
+      "published": "2005-06",
+      "accessed": "",
+      "notes": "Experiments on how nine-ending prices are perceived; effect tied to a change in the leftmost digit."
+    },
+    {
+      "id": "S2",
+      "url": null,
+      "title": "Effects of $9 Price Endings on Retail Sales: Evidence from Field Experiments",
+      "publisher": "Quantitative Marketing and Economics 1(1), Anderson & Simester",
+      "published": "2003",
+      "accessed": "",
+      "notes": "Mail-order catalog field experiments comparing $9-ending prices with nearby prices. Add the DOI after checking."
+    },
+    {
+      "id": "S3",
+      "url": "https://en.wikipedia.org/wiki/Psychological_pricing",
+      "title": "Psychological pricing",
+      "publisher": "Wikipedia",
+      "published": "",
+      "accessed": "",
+      "notes": "Overview only; use to find primary sources, not as the sole support for a claim."
+    }
+  ],
+  "claims": [
+    {
+      "id": "R1",
+      "text": "People give disproportionate weight to the leftmost digit of a price (left-digit effect).",
+      "source_ids": ["S1"],
+      "verified": false
+    },
+    {
+      "id": "R2",
+      "text": "The effect appears mainly when the leftmost digit changes (e.g. 2.99 vs 3.00).",
+      "source_ids": ["S1"],
+      "verified": false
+    },
+    {
+      "id": "R3",
+      "text": "Catalog field experiments reported higher demand at some 9-ending prices than at slightly lower prices.",
+      "source_ids": ["S2"],
+      "verified": false
+    },
+    {
+      "id": "R4",
+      "text": "Nine endings are associated with discounts, so premium brands often prefer round prices.",
+      "source_ids": ["S3"],
+      "verified": false
+    }
+  ]
+}

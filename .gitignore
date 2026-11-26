@@ -71,3 +71,10 @@ models/
 .vscode/*
 !.vscode/launch.json
 !.vscode/extensions.json
+
+# ---- Faceless Studio application ----
+node_modules/
+frontend/dist/
+*.egg-info/
+config/local.yaml
+content/uploads/

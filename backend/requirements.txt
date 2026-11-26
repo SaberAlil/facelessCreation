@@ -1,0 +1,3 @@
+# Installed by .devcontainer/setup.sh (run from the repository root).
+# AI extras (torch CPU, kokoro, faster-whisper): bash .devcontainer/install-ai-deps.sh
+-e ./backend[api,dev]

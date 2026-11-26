@@ -1,0 +1,114 @@
+# Faceless Studio defaults. Override in config/local.yaml (gitignored) or with
+# environment variables FACELESS__SECTION__KEY=value (e.g. FACELESS__RENDER__ENCODER=libx264).
+# Relative paths resolve against the repository root.
+paths:
+  data_dir: data
+  content_dir: content
+  fonts_dir: /usr/share/fonts/truetype/dejavu
+channel:
+  name: The Hidden Logic
+  language: en
+  default_hashtags:
+  - '#TheHiddenLogic'
+  - '#economics'
+script:
+  target_words_min: 150
+  target_words_max: 185
+  hard_words_min: 100
+  hard_words_max: 240
+  min_scenes: 4
+  max_scenes: 12
+llm:
+  provider: ollama
+  host: http://ollama:11434
+  model: qwen3:4b
+  num_ctx: 4096
+  reduced_num_ctx: 2048
+  temperature: 0.6
+  timeout_s: 600.0
+  max_attempts: 3
+  keep_alive: 0
+  estimated_vram_mib: 3800
+tts:
+  provider: kokoro
+  kokoro_repo: hexgrad/Kokoro-82M
+  voice: af_heart
+  lang_code: a
+  speed: 1.0
+  sample_rate: 24000
+  pause_between_scenes_ms: 350
+  tail_silence_ms: 700
+  narration_lufs: -16.0
+  device: cpu
+subtitles:
+  model: small.en
+  fallback_model: base.en
+  device: cpu
+  compute_type: int8
+  min_words: 2
+  max_words: 5
+  max_chars_per_line: 16
+  max_lines: 2
+  min_duration_s: 0.45
+  font: DejaVu Sans
+  font_size: 84
+  outline: 5
+  shadow: 2
+  primary_colour: '&H00FFFFFF'
+  accent_colour: '&H0000D7FF'
+  outline_colour: '&H00000000'
+  highlight_keywords: false
+  margin_v: 600
+  margin_l: 90
+  margin_r: 170
+  divergence_ratio_warn: 0.9
+render:
+  width: 1080
+  height: 1920
+  fps: 30
+  preview_width: 540
+  preview_height: 960
+  encoder: auto
+  x264_crf: 20
+  x264_preset: medium
+  nvenc_cq: 21
+  nvenc_preset: p5
+  audio_bitrate: 192k
+  audio_rate: 48000
+  loudness_lufs: -14.0
+  true_peak_db: -1.0
+  music_volume_db: -22.0
+  motion_zoom: 0.1
+  fit_mode: auto
+  min_duration_s: 45.0
+  max_duration_s: 90.0
+  duration_tolerance_s: 0.15
+  scene_timeout_s: 600.0
+  final_timeout_s: 1800.0
+resources:
+  vram_headroom_mib: 768
+  ram_headroom_mib: 3072
+  gpu_lock_timeout_s: 900.0
+  nvenc_vram_mib: 300
+  sample_interval_s: 1.0
+stock:
+  pexels_enabled: false
+  max_download_mb: 80
+  timeout_s: 30.0
+  per_scene_candidates: 3
+comfyui:
+  enabled: false
+  host: http://127.0.0.1:8188
+  workflow: config/comfyui/sd15_portrait.json
+  checkpoint: ''
+  checkpoint_license: ''
+  checkpoint_commercial_use: false
+  width: 512
+  height: 768
+  steps: 20
+  reduced_steps: 14
+  cfg: 6.5
+  timeout_s: 300.0
+  estimated_vram_mib: 3500
+cache:
+  max_gb: 10.0
