@@ -1,0 +1,7 @@
+# AI packages, installed on request by install-ai-deps.sh.
+# torch comes from the CPU-only index (about 200 MB instead of several GB):
+# Kokoro runs on CPU by default, and Faster Whisper uses CTranslate2, not torch.
+torch>=2.5
+faster-whisper>=1.1
+kokoro>=0.9
+soundfile>=0.12

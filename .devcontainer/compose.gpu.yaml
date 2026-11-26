@@ -1,0 +1,42 @@
+# GPU passthrough via the NVIDIA Container Toolkit.
+# detect-gpu.sh copies this file to compose.local.yaml when the host has a
+# working NVIDIA driver and the toolkit. Nothing here installs drivers, uses
+# privileged mode or mounts the Docker socket.
+
+services:
+  dev:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      # "video" exposes the NVENC/NVDEC libraries from the host driver
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility, video]
+
+  ollama:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility]
+
+  comfyui:
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility]

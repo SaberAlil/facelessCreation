@@ -1,0 +1,76 @@
+# Base services. GPU access is added by compose.local.yaml, which
+# detect-gpu.sh generates on the host before the container starts
+# (a copy of compose.gpu.yaml, or a CPU-only stub).
+#
+# No service publishes ports to the network except optional ComfyUI,
+# which is bound to 127.0.0.1 only. Ports 4200 and 8000 are forwarded
+# by VS Code to localhost.
+
+name: facelesscreation
+
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sleep infinity
+    init: true
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      CLAUDE_CONFIG_DIR: /home/vscode/.claude
+      OLLAMA_HOST: http://ollama:11434
+      HF_HOME: /home/vscode/.cache/huggingface
+      TORCH_HOME: /home/vscode/.cache/torch
+      APP_DATA_DIR: /workspaces/facelesscreation/data
+    volumes:
+      - ..:/workspaces/facelesscreation:cached
+      - claude-config:/home/vscode/.claude
+      - hf-cache:/home/vscode/.cache/huggingface
+      - torch-cache:/home/vscode/.cache/torch
+      - python-venvs:/home/vscode/.venvs
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    environment:
+      # Unload the model right after each request (frees VRAM for FFmpeg/TTS)
+      OLLAMA_KEEP_ALIVE: "0"
+      # Never hold more than one model, never run requests in parallel
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_QUEUE: "16"
+      OLLAMA_FLASH_ATTENTION: "1"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # Optional. Start with:
+  #   docker compose -f .devcontainer/compose.yaml -f .devcontainer/compose.local.yaml --profile comfyui up -d comfyui
+  # Stop it before running Ollama inference: 6 GB VRAM fits one large workload.
+  comfyui:
+    profiles: ["comfyui"]
+    build:
+      context: ./comfyui
+    ports:
+      - "127.0.0.1:8188:8188"
+    volumes:
+      - comfyui-models:/opt/ComfyUI/models
+      - comfyui-output:/opt/ComfyUI/output
+
+volumes:
+  claude-config:
+  hf-cache:
+  torch-cache:
+  python-venvs:
+  ollama-models:
+  comfyui-models:
+  comfyui-output:

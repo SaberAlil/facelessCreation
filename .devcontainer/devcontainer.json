@@ -1,0 +1,47 @@
+{
+  "name": "facelessCreation (GPU dev)",
+
+  "dockerComposeFile": ["compose.yaml", "compose.local.yaml"],
+  "service": "dev",
+  "runServices": ["dev", "ollama"],
+  "workspaceFolder": "/workspaces/facelesscreation",
+  "shutdownAction": "stopCompose",
+
+  "initializeCommand": "bash .devcontainer/detect-gpu.sh",
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+
+  "remoteUser": "vscode",
+  "updateRemoteUserUID": true,
+
+  "forwardPorts": [4200, 8000],
+  "portsAttributes": {
+    "4200": { "label": "Angular dev server", "onAutoForward": "notify" },
+    "8000": { "label": "FastAPI backend", "onAutoForward": "notify" }
+  },
+  "otherPortsAttributes": { "onAutoForward": "ignore" },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "ms-python.python",
+        "ms-python.debugpy",
+        "charliermarsh.ruff",
+        "angular.ng-template",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "eamodio.gitlens",
+        "usernamehw.errorlens",
+        "qwtel.sqlite-viewer"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/home/vscode/.venvs/app/bin/python",
+        "python.terminal.activateEnvironment": true,
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "[python]": { "editor.defaultFormatter": "charliermarsh.ruff" },
+        "claudeCode.initialPermissionMode": "default"
+      }
+    }
+  }
+}
