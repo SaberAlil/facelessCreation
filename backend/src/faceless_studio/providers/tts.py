@@ -19,6 +19,21 @@ from ..util import FacelessError, ProviderUnavailable, prefer_offline, run
 
 log = logging.getLogger("faceless")
 
+# English Kokoro voices (Apache-2.0, same repo as the model). The first letter is the
+# accent (a = American, b = British), the second the voice (f = female, m = male).
+VOICES = {
+    "af_heart": "Heart · warm American female (default)",
+    "af_bella": "Bella · lively American female",
+    "af_nicole": "Nicole · soft American female",
+    "am_michael": "Michael · calm American male",
+    "am_fenrir": "Fenrir · deep American male",
+    "am_puck": "Puck · energetic American male",
+    "bf_emma": "Emma · British female",
+    "bm_george": "George · British male",
+    "bm_fable": "Fable · young British male",
+}
+VOICE_MAX_BYTES = 5 * 1024 * 1024
+
 
 class TTSProvider(Protocol):
     name: str
@@ -68,6 +83,36 @@ class KokoroTTS:
                                                  device=self.cfg.device)
             return self._pipelines[key]
 
+    def voice_file(self) -> str:
+        """Local path of the voice pack. Voices other than the one installed with the model
+        (about 0.5 MB each) are downloaded once from the same pinned model revision; the
+        model cache is otherwise used offline."""
+        if self.cfg.voice not in VOICES:
+            raise FacelessError(f"unknown voice {self.cfg.voice!r}")
+        base = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")) / "hub"
+        snaps = base / ("models--" + self.cfg.kokoro_repo.replace("/", "--")) / "snapshots"
+        revs = sorted(snaps.iterdir()) if snaps.is_dir() else []
+        if not revs:
+            return self.cfg.voice  # first run: kokoro downloads model and voice itself
+        f = revs[0] / "voices" / f"{self.cfg.voice}.pt"
+        if f.is_file():
+            return str(f)
+        import httpx
+
+        from ..util import atomic_write_bytes
+        url = (f"https://huggingface.co/{self.cfg.kokoro_repo}/resolve/{revs[0].name}/"
+               f"voices/{self.cfg.voice}.pt")
+        log.info("downloading Kokoro voice %s", self.cfg.voice)
+        try:
+            r = httpx.get(url, follow_redirects=True, timeout=60)
+            r.raise_for_status()
+        except httpx.HTTPError as e:
+            raise ProviderUnavailable(f"could not download voice {self.cfg.voice}: {e}") from e
+        if len(r.content) > VOICE_MAX_BYTES:
+            raise FacelessError("voice file unexpectedly large")
+        atomic_write_bytes(f, r.content)
+        return str(f)
+
     def synthesize(self, text: str, out_wav: Path) -> None:
         import numpy as np
         import soundfile as sf
@@ -75,9 +120,10 @@ class KokoroTTS:
         if not text.strip():
             raise FacelessError("cannot synthesize empty text")
         pipe = self._pipeline()
+        voice = self.voice_file()
         chunks = []
         with self._lock:  # KPipeline is not documented as thread-safe
-            for _gs, _ps, audio in pipe(text, voice=self.cfg.voice, speed=self.cfg.speed,
+            for _gs, _ps, audio in pipe(text, voice=voice, speed=self.cfg.speed,
                                         split_pattern=r"\n+"):
                 if audio is None:
                     continue

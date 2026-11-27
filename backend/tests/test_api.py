@@ -14,6 +14,8 @@ H = {"X-Faceless": "1"}
 @pytest.fixture
 def client(settings):
     settings.script.hard_words_min = 5
+    settings.script.min_estimated_s = 1
+    settings.render.min_duration_s = 1
     app = create_app(settings)
     with TestClient(app) as c:
         c.app_ = app
@@ -59,53 +61,55 @@ def _wait(client, task):
 
 @needs_ffmpeg
 def test_full_flow_via_api(client, tone_tts, monkeypatch, research_file):
+    """One-click approvals; each approval continues automatically to the next one."""
     pl = client.app_.state.pipeline
     from faceless_studio.providers import tts as tts_mod
     monkeypatch.setattr(tts_mod, "get_tts", lambda cfg, name=None: tone_tts)
+    r = client.put("/api/settings", json={"reviewer": "Sam", "default_subtitles": "en"},
+                   headers=H)
+    assert r.json()["reviewer"] == "Sam"
     jid = client.post("/api/jobs", json={"topic": "API flow test"}, headers=H).json()["id"]
     pl.set_research(jid, research_file)
     t = client.post(f"/api/jobs/{jid}/draft", json={"text": SHORT_SCRIPT, "llm": False},
                     headers=H).json()
     assert _wait(client, t)["status"] == "done"
+    d = client.get(f"/api/jobs/{jid}").json()
+    assert [x["status"] for x in d["steps"]] == ["review", "todo", "todo", "todo"]
     sc = client.get(f"/api/jobs/{jid}/script").json()
     assert sc["report"]["words"] > 10 and not sc["approved"]
-    bad = client.post(f"/api/jobs/{jid}/approve-script",
-                      json={"confirm": "yes", "reviewer": "me"}, headers=H)
-    assert bad.status_code == 409
-    ok = client.post(f"/api/jobs/{jid}/approve-script",
-                     json={"confirm": "APPROVE", "reviewer": "me"}, headers=H)
-    assert ok.json()["approved"]
-    for stage in ("voice", "assets"):
-        assert _wait(client, client.post(f"/api/jobs/{jid}/run/{stage}",
-                                         headers=H).json())["status"] == "done"
+    # one click, no typing (acknowledge_flags is the "I checked the facts" button)
+    r = client.post(f"/api/jobs/{jid}/approve-script", json={"acknowledge_flags": True},
+                    headers=H).json()
+    assert r["approved"] and r["task"]["action"] == "continue"
+    client.app_.state.worker.wait_idle()
+    assert pl.studio.latest_approval(jid, "script")["reviewer"] == "Sam"
+    d = client.get(f"/api/jobs/{jid}").json()
+    assert d["steps"][1]["status"] == "review"  # narration + pictures done automatically
     a = client.get(f"/api/jobs/{jid}/assets").json()
     assert len(a["manifest"]["scenes"]) == 3
+    assert a["problems"] == []  # unreviewed licences don't block: approving confirms them
     assert client.get(f"/api/jobs/{jid}/files/scene-s01").status_code == 200
-    client.post(f"/api/jobs/{jid}/assets/rights", json={"status": "confirmed"}, headers=H)
-    r = client.post(f"/api/jobs/{jid}/approve-assets",
-                    json={"confirm": "APPROVE", "reviewer": "me"}, headers=H)
-    assert r.status_code == 200, r.text
-    t = _wait(client, client.post(f"/api/jobs/{jid}/run/subtitles-approximate",
-                                  headers=H).json())
-    assert t["status"] == "done", t
-    caps = client.get(f"/api/jobs/{jid}/captions").json()["track"]["captions"]
-    caps[0]["text"] = "Edited caption"
-    r = client.put(f"/api/jobs/{jid}/captions", json={"captions": caps}, headers=H)
-    assert r.json()["track"]["source"] == "imported"
-    caps[1]["start"] = caps[0]["start"]  # overlap: must be rejected
-    assert client.put(f"/api/jobs/{jid}/captions", json={"captions": caps},
+    # subtitle language per video
+    o = client.put(f"/api/jobs/{jid}/options", json={"subtitles": "none"}, headers=H).json()
+    assert o["options"]["subtitles"] == "none" and "it" in o["languages"]
+    assert client.put(f"/api/jobs/{jid}/options", json={"subtitles": "xx"},
                       headers=H).status_code == 422
-    t = _wait(client, client.post(f"/api/jobs/{jid}/run/resume", headers=H).json())
-    assert t["status"] == "done", t
+    # approving pictures confirms their licences and continues to the rendered video
+    monkeypatch.setattr(pl, "subtitles", lambda j, approximate=False, model=None:
+                        type(pl).subtitles(pl, j, approximate=True))
+    r = client.post(f"/api/jobs/{jid}/approve-assets", json={}, headers=H).json()
+    assert r["approved"] and r["task"]
+    client.app_.state.worker.wait_idle()
     d = client.get(f"/api/jobs/{jid}").json()
-    assert d["gate"]["state"] == "RENDERED" and d["files"]["final.mp4"]
+    assert d["gate"]["state"] == "RENDERED", d["gate"]
+    assert d["steps"][2]["status"] == "review"
+    assert pl.captions(jid).burn is False  # "none" chosen: nothing burned in
     r = client.get(f"/api/jobs/{jid}/files/final.mp4")
     assert r.status_code == 200 and r.headers["content-type"] == "video/mp4"
-    rv = client.get(f"/api/jobs/{jid}/review").json()
-    assert not rv["approved"]
-    r = client.post(f"/api/jobs/{jid}/approve-final",
-                    json={"confirm": "APPROVE", "reviewer": "me"}, headers=H)
-    assert r.status_code == 409 and "demo" in r.json()["detail"]
+    r = client.post(f"/api/jobs/{jid}/approve-final", json={}, headers=H)
+    assert r.status_code == 409 and "demo" in r.json()["detail"]  # tone fixture refused
+    ov = client.get("/api/overview").json()
+    assert any(x["id"] == jid for x in ov["review"]) and ov["reviewer_set"]
 
 
 def test_one_task_per_job(client):
@@ -134,3 +138,22 @@ def test_make_endpoint_creates_and_runs(client):
     assert d["gate"]["state"] == "DRAFT" and "research" in d["gate"]["reason"]
     again = client.post("/api/make", json={"day": 3}, headers=H).json()
     assert again["job_id"] == t["job_id"]  # never a second job for the same day
+
+
+@needs_ffmpeg
+def test_fit_stage_rerecords_and_continues(client, tone_tts, monkeypatch, research_file):
+    pl = client.app_.state.pipeline
+    from faceless_studio.providers import tts as tts_mod
+    monkeypatch.setattr(tts_mod, "get_tts", lambda cfg, name=None: tone_tts)
+    jid = client.post("/api/jobs", json={"topic": "Fit stage test"}, headers=H).json()["id"]
+    pl.set_research(jid, research_file)
+    pl.draft(jid, pasted_text=SHORT_SCRIPT)
+    pl.approve_script(jid, "t")
+    pl.voice(jid)
+    before = pl.timing(jid).duration
+    pl.s.render.max_duration_s = before + 0.3  # target is limit - 0.5 s: slightly too long
+    t = client.post(f"/api/jobs/{jid}/run/fit", headers=H).json()
+    done = _wait(client, t)
+    assert done["status"] == "done", (done["error"], done["hint"])
+    assert pl.timing(jid).duration < before
+    assert pl.studio.last_run(jid, "voice", "ok")["details"]["speedup"] > 1.0

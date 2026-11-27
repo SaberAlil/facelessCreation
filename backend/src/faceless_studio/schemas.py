@@ -209,7 +209,7 @@ class LibraryAsset(Strict):
 
 class SceneAsset(Strict):
     scene_id: str
-    kind: Literal["video", "image", "procedural", "audio"]
+    kind: Literal["video", "image", "procedural", "audio", "missing"]
     library_id: str | None = None
     path: str  # relative to the job dir or absolute library path
     sha256: str
@@ -225,6 +225,9 @@ class SceneAsset(Strict):
     rights: RightsStatus = RightsStatus.UNREVIEWED
     candidates: list[str] = Field(default_factory=list)
     reason: str = ""
+    # hash of the scene's narration when you picked this picture by hand: a manual pick is
+    # kept only while the scene says the same thing
+    narration_sha: str = ""
 
 
 class AssetManifest(Strict):
@@ -254,6 +257,7 @@ class CaptionTrack(Strict):
     model: str = ""
     language: str = "en"
     translated_by: str = ""  # model that translated from the English narration, if any
+    burn: bool = True  # False = "no subtitles" chosen: nothing burned into the video
     approximate: bool = False
     reviewed: bool = False
     divergence_ratio: float | None = None

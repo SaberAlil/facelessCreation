@@ -53,12 +53,14 @@ class Task(BaseModel):
     result: Any = None
     error: str | None = None
     hint: str | None = None
+    progress: dict | None = None  # {"message", "done", "total"} while running
 
 
 class Worker:
     """Single background thread: one long-running stage at a time."""
 
-    def __init__(self) -> None:
+    def __init__(self, pipeline: Pipeline | None = None) -> None:
+        self.pipeline = pipeline
         self.q: queue.Queue[tuple[Task, Callable[[], Any]]] = queue.Queue()
         self.tasks: dict[str, Task] = {}
         self._lock = threading.Lock()
@@ -81,6 +83,10 @@ class Worker:
         while True:
             task, fn = self.q.get()
             task.status, task.started = "running", utcnow()
+            if self.pipeline is not None:
+                def report(message: str, done: int, total: int, _t: Task = task) -> None:
+                    _t.progress = {"message": message, "done": done, "total": total}
+                self.pipeline.progress = report
             try:
                 res = fn()
                 task.result = _jsonable(res)
@@ -91,6 +97,9 @@ class Worker:
                 log.error("task %s crashed: %s", task.id, traceback.format_exc())
                 task.status, task.error = "failed", f"{type(e).__name__}: {e}"
             task.finished = utcnow()
+            task.progress = None
+            if self.pipeline is not None:
+                self.pipeline.progress = None
 
     def wait_idle(self, timeout: float = 600) -> None:
         """Test helper: block until the queue is drained."""
@@ -122,6 +131,7 @@ class NewJob(BaseModel):
     topic: str | None = None
     day: int | None = None
     date: str | None = None
+    subtitles: str | None = None
 
 
 class DraftBody(BaseModel):
@@ -131,10 +141,26 @@ class DraftBody(BaseModel):
 
 
 class Approval(BaseModel):
-    confirm: str
-    reviewer: str = Field(min_length=1, max_length=80)
-    notes: str = ""
+    """One click in the dashboard. The reviewer defaults to the name set in Settings."""
+    reviewer: str = Field(default="", max_length=80)
+    notes: str = Field(default="", max_length=2000)
     acknowledge_flags: bool = False
+    continue_after: bool = True  # run the following automatic steps straight away
+
+
+class OptionsBody(BaseModel):
+    subtitles: str | None = None
+    voice: str | None = None
+
+
+class PictureAction(BaseModel):
+    action: Literal["photo", "ai"]
+
+
+class SettingsBody(BaseModel):
+    reviewer: str | None = Field(default=None, max_length=80)
+    default_subtitles: str | None = None
+    default_voice: str | None = None
 
 
 class RightsBody(BaseModel):
@@ -159,7 +185,7 @@ class CaptionEdit(BaseModel):
 def create_app(settings: Settings | None = None) -> FastAPI:
     s = settings or get_settings()
     pl = Pipeline(Studio(s))
-    worker = Worker()
+    worker = Worker(pl)
     app = FastAPI(title="Faceless Studio", version=__version__, docs_url="/api/docs",
                   openapi_url="/api/openapi.json")
     app.state.pipeline = pl
@@ -281,6 +307,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             jid = pl.studio.create_job(body.topic).id
         else:
             raise FacelessError("give topic, day or date")
+        if body.subtitles:
+            pl.set_job_options(jid, body.subtitles)
         return worker.submit(jid, "make", lambda: pl.advance(jid))
 
     @app.get("/api/jobs/{job_id}")
@@ -301,7 +329,142 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "transitions": pl.studio.transitions(job_id)[-30:],
             "files": {k: (p.root / v).is_file() for k, v in FILES.items()},
             "timing": pl.timing(job_id).model_dump() if pl.timing(job_id) else None,
+            "options": pl.job_options(job_id),
+            "steps": job_steps(job_id),
+            "task": next((t.model_dump() for t in sorted(worker.tasks.values(),
+                                                          key=lambda t: t.created,
+                                                          reverse=True)
+                          if t.job_id == job_id), None),
         }
+
+    def job_steps(job_id: str) -> list[dict]:
+        """The four steps shown in the dashboard, in plain language."""
+        st = pl.effective_state(job_id)
+        order = ["DRAFT", "RESEARCH_REVIEW", "SCRIPT_APPROVED", "ASSETS_READY", "RENDERED",
+                 "FINAL_APPROVED", "EXPORTED"]
+        k = order.index(st.value)
+        assets_ready = pl.stage_fresh(job_id, "voice") and pl.stage_fresh(job_id, "assets")
+
+        def step(key: str, title: str, status: str, hint: str) -> dict:
+            return {"key": key, "title": title, "status": status, "hint": hint}
+
+        script = step("script", "Script",
+                      "done" if k >= 2 else "review" if k == 1 else "todo",
+                      "Check the facts and the length, then approve." if k == 1 else
+                      "The script is written from your sources." if k < 1 else "Approved")
+        pics = step("pictures", "Pictures",
+                    "done" if k >= 3 else "review" if k == 2 and assets_ready else
+                    "todo" if k < 2 else "working",
+                    "Replace any picture that does not fit, then approve." if k == 2 and
+                    assets_ready else "Approved" if k >= 3 else "Comes after the script")
+        video = step("video", "Video",
+                     "done" if k >= 5 else "review" if k == 4 else
+                     "working" if k == 3 else "todo",
+                     "Watch it and fix the subtitles if needed, then approve." if k == 4
+                     else "Approved" if k >= 5 else "Comes after the pictures")
+        publish = step("publish", "Publish", "done" if k >= 6 else
+                       "working" if k == 5 else "todo",
+                       "Download the video and copy the post texts." if k >= 6 else
+                       "Comes after the video")
+        return [script, pics, video, publish]
+
+    @app.get("/api/jobs/{job_id}/options")
+    def get_options(job_id: str = Depends(job)) -> dict:
+        from .pipeline import LANGUAGES
+        from .providers.tts import VOICES
+        return {"options": pl.job_options(job_id), "languages": LANGUAGES, "voices": VOICES}
+
+    @app.put("/api/jobs/{job_id}/options")
+    def put_options(body: OptionsBody, job_id: str = Depends(job)) -> dict:
+        from .pipeline import LANGUAGES
+        from .providers.tts import VOICES
+        return {"options": pl.set_job_options(job_id, body.subtitles, body.voice),
+                "languages": LANGUAGES, "voices": VOICES}
+
+    # ---------------------------------------------------------- settings
+    @app.get("/api/settings")
+    def get_app_settings() -> dict:
+        from .pipeline import LANGUAGES
+        from .providers.tts import VOICES
+        return {"reviewer": s.reviewer, "default_subtitles": s.subtitles.burn_language,
+                "default_voice": s.tts.voice, "voices": VOICES,
+                "languages": LANGUAGES, "max_duration_s": s.render.max_duration_s,
+                "min_duration_s": s.render.min_duration_s,
+                "picture_sources": s.visuals.order}
+
+    @app.put("/api/settings")
+    def put_app_settings(body: SettingsBody) -> dict:
+        import yaml
+
+        from .pipeline import LANGUAGES
+        local = s.project_root / "config" / "local.yaml"
+        data = yaml.safe_load(local.read_text()) if local.is_file() else {}
+        data = data or {}
+        if body.reviewer is not None:
+            s.reviewer = data["reviewer"] = body.reviewer.strip()
+        if body.default_subtitles is not None:
+            if body.default_subtitles not in LANGUAGES:
+                raise FacelessError(f"unknown language {body.default_subtitles}")
+            s.subtitles.burn_language = body.default_subtitles
+            data.setdefault("subtitles", {})["burn_language"] = body.default_subtitles
+        if body.default_voice is not None:
+            from .providers.tts import VOICES
+            if body.default_voice not in VOICES:
+                raise FacelessError(f"unknown voice {body.default_voice}")
+            # Only new videos use it: each video stores its own voice.
+            s.tts.voice = data.setdefault("tts", {})["voice"] = body.default_voice
+            s.tts.lang_code = data["tts"]["lang_code"] = body.default_voice[0]
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_text(yaml.safe_dump(data, sort_keys=False))
+        return get_app_settings()
+
+    @app.get("/api/voices/{voice}/sample")
+    def voice_sample(voice: str) -> FileResponse:
+        """A short spoken sample of a voice (made once, then cached)."""
+        from .providers.tts import VOICES, KokoroTTS
+        if voice not in VOICES:
+            raise NotFoundError(f"unknown voice {voice}")
+        out = s.cache_dir / "voice-samples" / f"{voice}.wav"
+        if not out.is_file():
+            tts = KokoroTTS(s.tts.model_copy(update={"voice": voice, "lang_code": voice[0]}))
+            tts.synthesize("Here is a quick fact you probably did not know. This is how I "
+                           "would narrate your next video.", out)
+        return FileResponse(out, media_type="audio/wav")
+
+    # ---------------------------------------------------------- overview
+    @app.get("/api/overview")
+    def overview() -> dict:
+        from datetime import date
+
+        import httpx
+        today = date.today().isoformat()
+        upcoming = pl.studio.db.all(
+            "SELECT day, date, topic FROM calendar WHERE date >= ? ORDER BY date LIMIT 7",
+            (today,))
+        jobs_by_day = {j["day"]: j for j in pl.studio.list_jobs() if j["day"] is not None}
+        for r in upcoming:
+            j = jobs_by_day.get(r["day"])
+            r["job"] = {"id": j["id"], "state": j["state"]} if j else None
+        running = {t.job_id: t.model_dump() for t in worker.tasks.values()
+                   if t.status in ("queued", "running")}
+        review, progress = [], []
+        for j in pl.studio.list_jobs():
+            steps = job_steps(j["id"])
+            cur = next((x for x in steps if x["status"] != "done"), None)
+            item = {"id": j["id"], "topic": j["topic"], "day": j["day"], "date": j["date"],
+                    "step": cur["title"] if cur else "Published",
+                    "task": running.get(j["id"])}
+            if j["id"] in running:
+                progress.append(item)
+            elif cur and cur["status"] == "review":
+                review.append(item)
+        try:
+            images_ok = httpx.get(f"{s.comfyui.host}/system_stats", timeout=2).is_success
+        except httpx.HTTPError:
+            images_ok = False
+        return {"today": today, "upcoming": upcoming, "review": review,
+                "in_progress": progress, "ai_images": images_ok,
+                "reviewer_set": bool(s.reviewer)}
 
     def _queue(job_id: str, action: str, fn: Callable[[], Any]) -> Task:
         return worker.submit(job_id, action, fn)
@@ -323,6 +486,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "render": lambda j: pl.render(j),
         "export": lambda j: pl.export(j),
         "resume": lambda j: pl.advance(j),
+        # Re-record the narration (speeds it up by at most 8% if it is slightly over the
+        # limit), then redo subtitles and video. Pictures and approvals are kept.
+        "fit": lambda j: (pl.voice(j), pl.advance(j))[-1],
     }
 
     @app.post("/api/jobs/{job_id}/run/{stage}", status_code=202)
@@ -368,22 +534,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return get_research(job_id)
 
 
-    def _confirmed(body: Approval) -> None:
-        if body.confirm != "APPROVE":
-            raise GateError("type APPROVE to confirm")
+    def _reviewer(body: Approval) -> str:
+        return (body.reviewer or s.reviewer or "reviewer").strip()
+
+    def _continue(job_id: str, body: Approval) -> dict | None:
+        """After an approval, run the following automatic steps right away."""
+        if not body.continue_after:
+            return None
+        try:
+            return worker.submit(job_id, "continue", lambda: pl.advance(job_id)).model_dump()
+        except GateError:
+            return None  # something is already running for this job
 
     @app.post("/api/jobs/{job_id}/approve-script")
     def approve_script(body: Approval, job_id: str = Depends(job)) -> dict:
-        _confirmed(body)
-        h = pl.approve_script(job_id, body.reviewer, body.acknowledge_flags, body.notes)
-        return {"approved": True, "hash": h}
+        h = pl.approve_script(job_id, _reviewer(body), body.acknowledge_flags, body.notes)
+        return {"approved": True, "hash": h, "task": _continue(job_id, body)}
 
     # ------------------------------------------------------------ assets
     @app.get("/api/jobs/{job_id}/assets")
     def assets(job_id: str = Depends(job)) -> dict:
         rv = pl.asset_review(job_id)
+        # Approving in the dashboard confirms the licences shown, so "unreviewed" is not a
+        # blocking problem here; missing pictures and unusable licences are.
+        problems = [x for x in rv["problems"] if not x.endswith("rights unreviewed")]
         return {"manifest": rv["manifest"].model_dump(mode="json"),
-                "problems": rv["problems"], "fresh": rv["fresh"], "approved": rv["approved"]}
+                "problems": problems, "fresh": rv["fresh"], "approved": rv["approved"]}
 
 
     @app.post("/api/jobs/{job_id}/assets/rights")
@@ -399,8 +575,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/jobs/{job_id}/approve-assets")
     def approve_assets(body: Approval, job_id: str = Depends(job)) -> dict:
-        _confirmed(body)
-        return {"approved": True, "hash": pl.approve_assets(job_id, body.reviewer, body.notes)}
+        """Approving the pictures confirms their licences (shown next to each one)."""
+        m = pl.manifest(job_id)
+        unreviewed = [a.scene_id for a in (m.scenes if m else [])
+                      if a.kind != "missing" and a.rights != RightsStatus.CONFIRMED]
+        if unreviewed:
+            pl.set_rights(job_id, unreviewed, RightsStatus.CONFIRMED)
+        h = pl.approve_assets(job_id, _reviewer(body), body.notes)
+        return {"approved": True, "hash": h, "task": _continue(job_id, body)}
+
+    @app.post("/api/jobs/{job_id}/scenes/{scene_id}/picture", status_code=202)
+    def scene_picture(scene_id: str, body: PictureAction, job_id: str = Depends(job)) -> Task:
+        return _queue(job_id, f"picture-{body.action}",
+                      lambda: pl.scene_picture(job_id, scene_id, body.action))
+
+    @app.post("/api/jobs/{job_id}/scenes/{scene_id}/upload")
+    async def scene_upload(scene_id: str, file: UploadFile = File(...),
+                           job_id: str = Depends(job)) -> dict:
+        suffix = Path(file.filename or "").suffix.lower()
+        if suffix not in (".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".webm"):
+            raise FacelessError("upload a photo (.jpg, .png, .webp) or a video clip (.mp4)")
+        data = await file.read(300 * 1024 * 1024 + 1)
+        if len(data) > 300 * 1024 * 1024:
+            raise FacelessError("file larger than 300 MB")
+        from .util import safe_filename
+        dest = s.cache_dir / "uploads" / safe_filename(f"{job_id}-{scene_id}-{file.filename}")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        pl.scene_picture(job_id, scene_id, "upload", upload=dest)
+        return assets(job_id)
 
     @app.get("/api/library")
     def library_list(kind: str | None = None) -> list[dict]:
@@ -439,8 +642,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/jobs/{job_id}/approve-final")
     def approve_final(body: Approval, job_id: str = Depends(job)) -> dict:
-        _confirmed(body)
-        return {"approved": True, "hash": pl.approve_final(job_id, body.reviewer, body.notes)}
+        h = pl.approve_final(job_id, _reviewer(body), body.notes)
+        return {"approved": True, "hash": h, "task": _continue(job_id, body)}
+
+    @app.get("/api/jobs/{job_id}/export")
+    def export_files(job_id: str = Depends(job)) -> dict:
+        d = pl.paths(job_id).export_dir
+        files = sorted(f for f in d.iterdir() if f.is_file()) if d.is_dir() else []
+        texts = {f.stem: f.read_text(encoding="utf-8") for f in files
+                 if f.name in ("youtube.txt", "tiktok.txt", "instagram.txt")}
+        return {"files": [{"name": f.name, "bytes": f.stat().st_size} for f in files],
+                "texts": texts, "folder": str(d)}
+
+    @app.get("/api/jobs/{job_id}/export/{name}")
+    def export_file(name: str, job_id: str = Depends(job)) -> FileResponse:
+        d = pl.paths(job_id).export_dir
+        allowed = {f.name: f for f in d.iterdir() if f.is_file()} if d.is_dir() else {}
+        if name not in allowed:
+            raise NotFoundError("no such export file")
+        return FileResponse(allowed[name], filename=name)
 
     @app.get("/api/jobs/{job_id}/files/{name}")
     def file(name: str, job_id: str = Depends(job)) -> FileResponse:

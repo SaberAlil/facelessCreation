@@ -63,7 +63,7 @@ def build_export(s: Settings, paths: JobPaths, job: JobInput, script: Script,
     shutil.copy2(paths.render_dir / "cover.png", tmp / f"{base}-cover.png")
     import json as _json
     lang = _json.loads(paths.captions_json.read_text(encoding="utf-8")).get("language", "en")
-    shutil.copy2(paths.srt, tmp / f"{base}.{lang}.srt")  # the burned-in captions
+    shutil.copy2(paths.srt, tmp / f"{base}.{lang}.srt")  # subtitles (burned in unless "none")
     en_srt = paths.captions_dir / "captions.en.srt"
     if lang != "en" and en_srt.is_file():
         shutil.copy2(en_srt, tmp / f"{base}.en.srt")

@@ -138,6 +138,29 @@ Known limitations of this round:
 - Wikipedia rate-limits anonymous clients (HTTP 429 after many quick lookups).
 - SD 1.5 base images are average quality and look AI-made; first ComfyUI image build downloads several GB on the host.
 
+## Update 26 Nov 2026 (evening): simpler workflow, real photos, length limit
+
+- [x] Pictures: Wikimedia Commons photos first (PD/CC0/CC BY only, credits recorded), AI images second, your uploads; **no generated graphics**; scenes without a picture block approval. Per scene: another photo / AI image / upload. Live check: day-1 IKEA test got 4 real IKEA store photos + 1 related shopping photo (6.4 s)
+- [x] Script writer describes concrete photographable shots and names the subject in photo searches
+- [x] No text on top of the video (overlay off); wide photos fill the frame (pan), panoramas get a blurred background
+- [x] Subtitle language per video (en default, it, es, fr, de, pt, none) + default in Settings; changing it redoes only subtitles + video
+- [x] 45–90 s enforced: length estimate (2.2 words/s + pauses) shown live while editing; scripts over ~86 s or under 45 s cannot be approved; narration sped up ≤ 8 % (pitch kept) if slightly long, otherwise a clear message naming the scenes to shorten. Live: 159-word draft → 75.7 s
+- [x] One-click approvals (no typing); approving starts the next automatic steps; reviewer name set once
+- [x] Dashboard redesign: Home (today, waiting for you, in progress), month calendar with search, 4-step video page with live progress, subtitle editor beside the player, Publish step with downloads and copy buttons, Settings + system check
+- Tests: backend 97 passed (+1 model test), frontend 7 passed, ruff clean
+
+## Update 26 Nov 2026 (night): Shorts-style editing (no stock-video keys needed)
+
+- [x] Short scenes: the drafted narration is split into beats of whole sentences (8–18 words, long sentences cut at a comma), each with its own picture. Pause between scenes 250 ms
+- [x] Cuts every ~3 s: still scenes over 4 s are cut into close-ups of the same picture (wide → upper close-up → lower close-up); wide photos get full-frame sweeps across the photo instead of blurred bars. Live IKEA re-run: 9 scenes → 22 shots in 71.9 s
+- [x] Shorts captions: 1–3 words on one line, the spoken word highlighted in yellow (real Whisper word times; spread by length after edits or translation), quick pop-in. `subtitles.style: lines` restores classic subtitles
+- [x] Openverse (free, no key) as second photo source after Commons: CC0 / public domain / CC BY only, creator + licence recorded, credits exported
+- [x] Voice picker: 9 English Kokoro voices (American/British, female/male) per video + default in Settings, ▶ sample. Extra voice packs (~0.5 MB) download once from the same pinned Kokoro revision. Changing a video's voice redoes narration → subtitles → video only
+- [x] Manual picture choices are dropped when the scene's text changes (e.g. after "Rewrite with AI")
+- [x] AI images: stronger negative prompt, 28 steps, cfg 7 (SD 1.5 remains the quality limit)
+- Tests: backend 104 passed (+1 model test), frontend 7 passed, ruff clean
+- Not done: stock video (needs Pexels/Pixabay keys), background music (needs licensed tracks), larger script model (needs a download you approve)
+
 # Part 1: Dev container
 
 **Update 26 Nov 2026 09:04: `validate.sh` passed on the laptop inside the dev container

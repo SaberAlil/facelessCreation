@@ -1,119 +1,95 @@
-import { Component, OnDestroy, effect, inject, input, signal } from '@angular/core';
-import { DecimalPipe } from '@angular/common';
+import { Component, OnDestroy, computed, effect, inject, input, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
-import { Api, JobDetail, Task, errorText } from '../api';
-import { ScriptTab } from './script-tab';
-import { AssetsTab } from './assets-tab';
-import { CaptionsTab } from './captions-tab';
-import { ReviewTab } from './review-tab';
-
-type Tab = 'overview' | 'script' | 'assets' | 'captions' | 'review';
-
-const ACTIONS: { stage: string; label: string; help: string }[] = [
-  { stage: 'voice', label: 'Narration', help: 'Kokoro TTS on CPU' },
-  { stage: 'assets', label: 'Visuals', help: 'library → original graphics' },
-  { stage: 'subtitles', label: 'Captions', help: 'faster-whisper CPU INT8' },
-  { stage: 'subtitles-approximate', label: 'Approx. captions', help: 'fallback; needs review' },
-  { stage: 'preview', label: 'Preview 540p', help: 'fast check render' },
-  { stage: 'render', label: 'Final render', help: '1080x1920 H.264/AAC' },
-  { stage: 'export', label: 'Export', help: 'after final approval' },
-  { stage: 'resume', label: 'Run automatically', help: 'everything up to the next approval' },
-];
+import { Api, JobDetail, LANGUAGES, Task, VOICES, errorText } from '../api';
+import { ScriptStep } from './steps/script-step';
+import { PicturesStep } from './steps/pictures-step';
+import { VideoStep } from './steps/video-step';
+import { PublishStep } from './steps/publish-step';
 
 @Component({
   selector: 'app-job',
-  imports: [RouterLink, DecimalPipe, ScriptTab, AssetsTab, CaptionsTab, ReviewTab],
+  imports: [RouterLink, FormsModule, ScriptStep, PicturesStep, VideoStep, PublishStep],
   template: `
-    <p class="small"><a routerLink="/jobs">← Jobs</a></p>
+    <p class="small"><a routerLink="/videos">← All videos</a></p>
     @if (d(); as d) {
-      <h1>{{ d.title || d.job.topic }}</h1>
-      <div class="row small muted">
-        <code>{{ d.job.id }}</code>
-        @if (d.job.day) { <span>day {{ d.job.day }} {{ d.job.date }}</span> }
-        <span class="pill {{ d.job.state }}">{{ d.job.state }}</span>
-        @if (d.timing) { <span>narration {{ d.timing.duration | number: '1.1-1' }}s
-          ({{ d.timing.provider }}{{ d.timing.demo ? ', DEMO' : '' }})</span> }
-      </div>
-      <div class="notice">
-        <div class="row">
-          <span><b>Next:</b> {{ d.gate.reason }}</span>
-          @if (!d.gate.done && !isApproval(d.gate.reason)) {
-            <button class="primary" (click)="run('resume')" [disabled]="busy()">
-              Run automatically to the next approval</button>
-          }
-          @if (isApproval(d.gate.reason)) {
-            <span class="small">→ open the <b>{{ approvalTab(d.gate.reason) }}</b> tab to review and approve,
-              then press "Run automatically" again.</span>
-          }
+      <div class="row spread head">
+        <div>
+          <h1>{{ d.title || d.job.topic }}</h1>
+          <div class="small muted">{{ d.job.date ?? 'free topic' }}{{ d.job.day ? ' · day ' + d.job.day : '' }}
+            @if (d.timing) { · {{ d.timing.duration.toFixed(0) }} s }</div>
         </div>
-        @if (d.job.failed_stage) { <div class="bad small">Last {{ d.job.failed_stage }} run failed: {{ d.job.error }}</div> }
-      </div>
-      @if (task(); as t) {
-        <div class="card small">
-          Task <b>{{ t.action }}</b>: {{ t.status }}
-          @if (t.status === 'running' || t.status === 'queued') { … }
-          @if (t.error) { <div class="error">{{ t.error }}{{ t.hint ? ' — ' + t.hint : '' }}</div> }
+        <div class="opts">
+          <label class="small">Voice
+            <span class="row">
+              <select [ngModel]="d.options.voice" (ngModelChange)="setVoice($event)" [disabled]="!!running()">
+                @for (v of voices; track v[0]) { <option [value]="v[0]">{{ v[1] }}</option> }
+              </select>
+              <button class="small" (click)="listen(d.options.voice)" [disabled]="!!playing()"
+                      title="Play a short sample of this voice">{{ playing() ? '…' : '▶' }}</button>
+            </span>
+          </label>
+          <label class="small">Subtitles
+            <select [ngModel]="d.options.subtitles" (ngModelChange)="setSubtitles($event)" [disabled]="!!running()">
+              @for (l of langs; track l[0]) { <option [value]="l[0]">{{ l[1] }}</option> }
+            </select>
+          </label>
         </div>
+      </div>
+
+      <ol class="stepper">
+        @for (s of d.steps; track s.key; let i = $index) {
+          <li [class]="s.status" [class.current]="panel() === s.key" (click)="panel.set(s.key)">
+            <span class="num">{{ s.status === 'done' ? '✓' : i + 1 }}</span>
+            <span><b>{{ s.title }}</b><br /><span class="small">{{ statusText(s.status) }}</span></span>
+          </li>
+        }
+      </ol>
+
+      @if (running(); as t) {
+        <div class="card working">
+          <div class="row spread"><b>{{ t.progress?.message || 'Starting…' }}</b>
+            @if (t.progress?.total) { <span class="small muted">{{ t.progress!.done }} / {{ t.progress!.total }}</span> }</div>
+          <div class="progress" [class.indeterminate]="!t.progress?.total">
+            <div [style.width.%]="pct(t)"></div></div>
+          <p class="small muted">You can leave this page; the work continues.</p>
+        </div>
+      } @else if (failed(); as f) {
+        <div class="banner error"><b>Something went wrong:</b> {{ f }}
+          <div style="margin-top:.5rem"><button (click)="cont()">Try again</button></div></div>
       }
-      @if (error()) { <div class="error">{{ error() }}</div> }
+      @if (error()) { <div class="banner error">{{ error() }}</div> }
 
-      <nav class="tabs">
-        @for (t of tabs; track t.id) {
-          <button [class.active]="tab() === t.id" (click)="tab.set(t.id)">{{ t.label }}</button>
-        }
-      </nav>
-
-      @switch (tab()) {
-        @case ('overview') {
-          <h2>Run a stage</h2>
-          <div class="actions">
-            @for (a of actions; track a.stage) {
-              <button (click)="run(a.stage)" [disabled]="busy()" [title]="a.help">{{ a.label }}</button>
-            }
-          </div>
-          <p class="small muted">Stages run one at a time on the server. Approvals are never
-            automatic: use the Script, Assets and Review tabs.</p>
-          <h2>Status</h2>
-          <div class="row small">
-            @for (k of keys(d.approvals); track k) {
-              <span class="pill">{{ k }} approval {{ d.approvals[k] ? '✓' : '✗' }}</span> }
-            @for (k of keys(d.fresh); track k) {
-              <span class="pill">{{ k }} {{ d.fresh[k] ? 'current' : 'missing/stale' }}</span> }
-          </div>
-          <h2>Stage runs (time, device, memory)</h2>
-          <div class="table-wrap">
-            <table class="small">
-              <thead><tr><th>Stage</th><th>Status</th><th>Started</th><th>Secs</th><th>Device</th>
-                <th>RSS MiB</th><th>Child MiB</th><th>GPU used MiB</th><th>Fallbacks / error</th></tr></thead>
-              <tbody>
-                @for (r of d.runs.slice().reverse(); track r.id) {
-                  <tr>
-                    <td>{{ r.stage }}</td>
-                    <td [class.bad]="r.status === 'failed'">{{ r.status }}</td>
-                    <td>{{ r.started }}</td><td>{{ r.duration_s | number: '1.1-1' }}</td>
-                    <td>{{ r.device }}</td><td>{{ r.peak_rss_mib }}</td><td>{{ r.peak_children_rss_mib }}</td>
-                    <td>{{ r.peak_vram_used_mib }}</td>
-                    <td>{{ r.fallbacks.join('; ') }} <span class="bad">{{ r.error }}</span></td>
-                  </tr>
-                }
-              </tbody>
-            </table>
-          </div>
-        }
-        @case ('script') { <app-script-tab [jobId]="d.job.id" [version]="version()" (changed)="refresh()" (task)="track($event)" /> }
-        @case ('assets') { <app-assets-tab [jobId]="d.job.id" [version]="version()" (changed)="refresh()" /> }
-        @case ('captions') { <app-captions-tab [jobId]="d.job.id" [version]="version()" (changed)="refresh()" /> }
-        @case ('review') { <app-review-tab [job]="d" [version]="version()" (changed)="refresh()" (task)="track($event)" /> }
+      @switch (panel()) {
+        @case ('script') { <app-script-step [jobId]="d.job.id" [version]="version()" [busy]="!!running()"
+                            (task)="track($event)" (changed)="refresh()" /> }
+        @case ('pictures') { <app-pictures-step [jobId]="d.job.id" [version]="version()" [busy]="!!running()"
+                              [step]="d.steps[1]" (task)="track($event)" (changed)="refresh()" /> }
+        @case ('video') { <app-video-step [job]="d" [version]="version()" [busy]="!!running()"
+                           (task)="track($event)" (changed)="refresh()" (goto)="panel.set($event)" /> }
+        @case ('publish') { <app-publish-step [job]="d" [version]="version()" /> }
       }
     } @else if (error()) {
-      <div class="error">{{ error() }}</div>
+      <div class="banner error">{{ error() }}</div>
     }
   `,
   styles: `
-    .tabs { display: flex; gap: .25rem; margin: 1rem 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-    .tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none; }
-    .tabs button.active { border-bottom-color: var(--accent); font-weight: 600; }
-    .actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+    .head { align-items: flex-start; margin-bottom: 1rem; }
+    .opts { display: flex; gap: .8rem; flex-wrap: wrap; align-items: flex-end; }
+    .opts .row { gap: .3rem; flex-wrap: nowrap; }
+    .stepper { list-style: none; padding: 0; margin: 0 0 1.25rem; display: grid;
+               grid-template-columns: repeat(4, 1fr); gap: .5rem; }
+    .stepper li { display: flex; gap: .6rem; align-items: center; padding: .7rem .8rem; cursor: pointer;
+                  border-radius: 10px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); }
+    .stepper li.current { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); color: var(--fg); }
+    .num { width: 1.8rem; height: 1.8rem; border-radius: 50%; display: grid; place-items: center;
+           background: var(--bg); font-weight: 700; flex: none; }
+    .stepper li.done .num { background: var(--ok-soft); color: var(--ok); }
+    .stepper li.review .num { background: var(--warn-soft); color: var(--warn); }
+    .stepper li.working .num { background: var(--accent-soft); color: var(--accent); }
+    @media (max-width: 640px) { .stepper { grid-template-columns: repeat(2, 1fr); } }
+    .working { border-left: 4px solid var(--accent); }
+    .working .progress { margin: .6rem 0 .2rem; }
   `,
 })
 export class JobPage implements OnDestroy {
@@ -121,67 +97,110 @@ export class JobPage implements OnDestroy {
   id = input.required<string>();
   d = signal<JobDetail | null>(null);
   task = signal<Task | null>(null);
-  busy = signal(false);
   error = signal('');
-  tab = signal<Tab>('overview');
   version = signal(0);
-  actions = ACTIONS;
-  tabs: { id: Tab; label: string }[] = [
-    { id: 'overview', label: 'Overview' }, { id: 'script', label: 'Script & research' },
-    { id: 'assets', label: 'Assets' }, { id: 'captions', label: 'Captions' },
-    { id: 'review', label: 'Preview, review & export' },
-  ];
+  panel = signal<string>('script');
+  langs = Object.entries(LANGUAGES);
+  voices = Object.entries(VOICES);
+  playing = signal('');
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private chosePanel = false;
+
+  running = computed(() => {
+    const t = this.task();
+    return t && (t.status === 'queued' || t.status === 'running') ? t : null;
+  });
+  failed = computed(() => {
+    const t = this.task();
+    if (t && t.status === 'failed') return (t.error ?? '') + (t.hint ? ' — ' + t.hint : '');
+    const j = this.d()?.job;
+    return j?.state === 'FAILED' && !this.running() ? `${j.failed_stage}: ${j.error}` : '';
+  });
 
   constructor() {
-    effect(() => { this.id(); this.refresh(); this.resumeTracking(); });
+    effect(() => { this.id(); this.chosePanel = false; this.refresh(); });
   }
 
   ngOnDestroy() { if (this.timer) clearTimeout(this.timer); }
 
-  keys(o: Record<string, boolean>) { return Object.keys(o); }
+  statusText(s: string) {
+    return { todo: 'Not yet', working: 'Working…', review: 'Your turn', done: 'Done' }[s] ?? s;
+  }
 
-  isApproval(reason: string) { return /review|approval/i.test(reason); }
-
-  approvalTab(reason: string) {
-    if (/script/i.test(reason)) return 'Script & research';
-    if (/asset|rights/i.test(reason)) return 'Assets';
-    return 'Preview, review & export';
+  pct(t: Task) {
+    const p = t.progress;
+    return p && p.total ? Math.round((100 * p.done) / p.total) : 35;
   }
 
   async refresh() {
     try {
-      this.d.set(await this.api.job(this.id()));
+      const d = await this.api.job(this.id());
+      const wasRunning = !!this.running();
+      this.d.set(d);
+      if (d.task) this.task.set(d.task);
+      if (!this.chosePanel || (wasRunning && !this.running())) {
+        const cur = d.steps.find((s) => s.status !== 'done');
+        this.panel.set(cur ? cur.key : 'publish');
+        this.chosePanel = true;
+      }
       this.version.update((v) => v + 1);
       this.error.set('');
     } catch (e) { this.error.set(errorText(e)); }
+    this.schedule();
   }
 
-  private async resumeTracking() {
+  private schedule() {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(() => (this.running() ? this.poll() : this.refresh()), this.running() ? 1500 : 8000);
+  }
+
+  private async poll() {
+    const t = this.running();
+    if (!t) return this.refresh();
     try {
-      const running = (await this.api.tasks(this.id())).find(
-        (t) => t.status === 'running' || t.status === 'queued');
-      if (running) this.track(running);
-    } catch { /* not fatal */ }
+      const nt = await this.api.task(t.id);
+      this.task.set(nt);
+      if (nt.status === 'done' || nt.status === 'failed') return this.refresh();
+    } catch (e) { this.error.set(errorText(e)); }
+    this.schedule();
   }
 
-  async run(stage: string) {
-    this.error.set('');
-    try { this.track(await this.api.run(this.id(), stage)); }
+  track(t: Task | null) {
+    if (!t) { this.refresh(); return; }
+    this.task.set(t);
+    this.schedule();
+  }
+
+  async cont() {
+    try { this.track(await this.api.run(this.id(), 'resume')); }
     catch (e) { this.error.set(errorText(e)); }
   }
 
-  track(t: Task) {
-    this.task.set(t);
-    this.busy.set(t.status === 'queued' || t.status === 'running');
-    if (this.timer) clearTimeout(this.timer);
-    if (this.busy()) {
-      this.timer = setTimeout(async () => {
-        try { this.track(await this.api.task(t.id)); }
-        catch (e) { this.error.set(errorText(e)); this.busy.set(false); }
-      }, 1500);
-    } else {
-      this.refresh();
-    }
+  async setVoice(voice: string) {
+    try {
+      await this.api.setOptions(this.id(), { voice });
+      const d = this.d();
+      // Narration already recorded: record it again with the new voice, then redo the video
+      if (d && d.steps[0].status === 'done') await this.cont();
+      else await this.refresh();
+    } catch (e) { this.error.set(errorText(e)); }
+  }
+
+  listen(voice: string) {
+    // The first sample of a voice is made on demand (a few seconds), then cached.
+    this.playing.set(voice);
+    const a = new Audio(this.api.voiceSampleUrl(voice));
+    a.onended = a.onerror = () => this.playing.set('');
+    a.play().catch(() => this.playing.set(''));
+  }
+
+  async setSubtitles(lang: string) {
+    try {
+      await this.api.setOptions(this.id(), { subtitles: lang });
+      const d = this.d();
+      // Subtitles already made: redo subtitles + video now
+      if (d && (d.steps[2].status !== 'todo')) await this.cont();
+      else await this.refresh();
+    } catch (e) { this.error.set(errorText(e)); }
   }
 }

@@ -76,8 +76,7 @@ def _confirm(what: str, yes: bool) -> None:
     if not sys.stdin.isatty():
         raise GateError(f"{what} needs explicit confirmation",
                         hint="re-run interactively, or pass --yes to confirm you reviewed it")
-    answer = typer.prompt(f"Type APPROVE to confirm {what}", default="", show_default=False)
-    if answer.strip() != "APPROVE":
+    if not typer.confirm(f"Approve {what}?", default=False):
         raise GateError("not approved")
 
 
@@ -206,6 +205,7 @@ def new(
     day: Annotated[int | None, typer.Option(help="calendar day number")] = None,
     on_date: Annotated[str | None, typer.Option("--date", help="calendar date YYYY-MM-DD")] = None,
     notes: str = "",
+    subtitles: Annotated[str | None, typer.Option(help="en|it|es|fr|de|pt|none")] = None,
 ) -> None:
     """Create a job from a calendar day/date or a free topic."""
     from .calendar import calendar_entry
@@ -217,9 +217,23 @@ def new(
         job = st.create_job(topic, notes=notes)
     else:
         raise FacelessError("give --day, --date or --topic")
+    if subtitles:
+        Pipeline(st).set_job_options(job.id, subtitles)
     console.print(f"[green]created[/] {job.id}  ({job.topic})")
     console.print(f"dir: {st.paths(job.id).root}")
     _next(Pipeline(st), job.id)
+
+
+@app.command("set")
+@handle_errors
+def set_options(job_id: JobArg,
+                subtitles: Annotated[str | None, typer.Option(help="en|it|es|fr|de|pt|none")]
+                = None) -> None:
+    """Change a job's options (e.g. subtitle language; only subtitles and video redo)."""
+    pl = _pipeline()
+    jid = _job(pl, job_id)
+    console.print(pl.set_job_options(jid, subtitles))
+    _next(pl, jid)
 
 
 @app.command("list")
@@ -484,7 +498,8 @@ def approve_script(
     pl = _pipeline()
     jid = _job(pl, job_id)
     _confirm("that you reviewed the script and its factual claims", yes)
-    h = pl.approve_script(jid, reviewer or default_reviewer(), acknowledge_flags, notes)
+    who = reviewer or pl.s.reviewer or default_reviewer()
+    h = pl.approve_script(jid, who, acknowledge_flags, notes)
     console.print(f"[green]script approved[/] (hash {h[:12]})")
     _next(pl, jid)
 
@@ -584,13 +599,22 @@ def assets(
     procedural: Annotated[bool, typer.Option(help="use an original graphic for --scene")] = False,
     overlay: Annotated[str | None, typer.Option(help="graphic text for --procedural")] = None,
     music: Annotated[str | None, typer.Option(help="library audio id, or 'none'")] = None,
-    ai_images: Annotated[bool, typer.Option(help="generate missing visuals with local "
-                                            "ComfyUI (needs comfyui.enabled)")] = False,
+    ai_images: Annotated[bool | None, typer.Option(
+        "--ai-images/--no-ai-images", help="allow AI images for scenes without a photo")]
+    = None,
+    photo: Annotated[bool, typer.Option(help="--scene: try another Commons photo")] = False,
+    ai: Annotated[bool, typer.Option(help="--scene: generate a new AI image")] = False,
+    upload: Annotated[Path | None, typer.Option(help="--scene: use your own photo/clip")]
+    = None,
 ) -> None:
     """Select visuals per scene (library → Pexels → original graphics) or replace one."""
     pl = _pipeline()
     jid = _job(pl, job_id)
-    if scene:
+    if scene and (photo or ai or upload):
+        action = "photo" if photo else "ai" if ai else "upload"
+        pl.scene_picture(jid, scene, action, upload=upload)
+        console.print(f"{scene}: new picture ({action})")
+    elif scene:
         pl.replace_asset(jid, scene, use, procedural, overlay)
         console.print(f"replaced {scene}")
     elif music is not None:
@@ -601,10 +625,11 @@ def assets(
         _print_outcome(o)
         for sid, prov, ref in o.details["scenes"]:
             console.print(f"  {sid}: {prov} {ref or ''}")
-        for e in o.details.get("ai_errors", []):
-            console.print(f"[yellow]comfyui:[/] {e}")
-        for e in o.details.get("pexels_errors", []):
-            console.print(f"[yellow]pexels:[/] {e}")
+        for e in o.details.get("errors", []):
+            console.print(f"[yellow]{e}[/]")
+        if o.details.get("missing"):
+            console.print(f"[red]{o.details['missing']} scene(s) need a picture:[/] use "
+                          f"--scene ID --photo / --ai / --upload FILE")
     _next(pl, jid)
 
 
@@ -644,7 +669,7 @@ def review_assets(
         console.print(f"[yellow]- {prob}[/]")
     if approve:
         _confirm("the asset set (rights and depictions checked)", yes)
-        h = pl.approve_assets(jid, reviewer or default_reviewer())
+        h = pl.approve_assets(jid, reviewer or pl.s.reviewer or default_reviewer())
         console.print(f"[green]assets approved[/] ({h[:12]})")
     _next(pl, jid)
 
@@ -752,7 +777,7 @@ def approve_final(job_id: JobArg, yes: Annotated[bool, typer.Option("--yes")] = 
             break
     else:
         _confirm("that you watched the final video and it is ready to publish", yes)
-    h = pl.approve_final(jid, reviewer or default_reviewer(), notes)
+    h = pl.approve_final(jid, reviewer or pl.s.reviewer or default_reviewer(), notes)
     console.print(f"[green]final approved[/] ({h[:12]})")
     _next(pl, jid)
 
@@ -783,6 +808,8 @@ def make(
     topic: Annotated[str | None, typer.Option(help="a free topic instead of the calendar")]
     = None,
     limit: Annotated[int, typer.Option(help="max videos this run")] = 7,
+    subtitles: Annotated[str | None, typer.Option(help="en|it|es|fr|de|pt|none (new jobs)")]
+    = None,
 ) -> None:
     """Do everything automatically: research → AI script → voice → AI images → captions →
     render, stopping only where you must approve. Run it again after each approval."""
@@ -791,6 +818,8 @@ def make(
     pl = _pipeline()
     if topic:
         jid = pl.studio.create_job(topic).id
+        if subtitles:
+            pl.set_job_options(jid, subtitles)
         console.print(f"created {jid}")
         gate = pl.advance(jid, on_step=lambda s: console.print(f"→ {s}"))
         console.print(f"stopped at: [bold]{gate.state.value}[/] — {gate.reason}")
@@ -799,6 +828,8 @@ def make(
         if gate.next_command:
             console.print(f"next: [cyan]{gate.next_command}[/]")
         return
+    if subtitles:
+        pl.s.subtitles.burn_language = subtitles  # default for jobs created by this run
     if day is not None:
         days = f"{day}-{day}"
     if not (days or date_from or date_to):

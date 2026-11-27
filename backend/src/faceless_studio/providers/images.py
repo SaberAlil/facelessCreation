@@ -28,8 +28,10 @@ from ..util import FacelessError, ProviderUnavailable, atomic_write_bytes
 
 log = logging.getLogger("faceless")
 
-NEGATIVE = ("text, watermark, logo, signature, brand name, celebrity, real person, "
-            "deformed, blurry, lowres, nsfw")
+NEGATIVE = ("text, letters, watermark, logo, signature, brand name, celebrity, "
+            "cartoon, illustration, painting, drawing, 3d render, anime, oversaturated, "
+            "deformed, distorted face, bad anatomy, extra fingers, extra limbs, duplicate, "
+            "cropped, out of frame, blurry, lowres, jpeg artifacts, nsfw")
 
 
 @dataclass

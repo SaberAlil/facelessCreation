@@ -26,6 +26,8 @@ def settings(tmp_path: Path):
         "FACELESS__COMFYUI__ENABLED": "false",
         "FACELESS__SUBTITLES__BURN_LANGUAGE": "en",
         "FACELESS__RESEARCH__AUTO_WIKIPEDIA": "false",
+        # offline pictures: your library, then generated test graphics (never in production)
+        "FACELESS__VISUALS__ORDER": "[library, graphics]",
     }
     return load_settings(root=REPO, environ=env)
 
@@ -104,5 +106,7 @@ def small_limits(monkeypatch):
     """Allow short test scripts (normal minimum is 100 words)."""
     def apply(pl: Pipeline) -> Pipeline:
         pl.s.script.hard_words_min = 5
+        pl.s.script.min_estimated_s = 1
+        pl.s.render.min_duration_s = 1
         return pl
     return apply

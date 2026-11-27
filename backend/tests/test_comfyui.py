@@ -98,7 +98,8 @@ def test_oom_retries_once_with_reduced_settings(tmp_path, png):
     p = ComfyUIProvider(_cfg(), ResourceConfig(), tmp_path, WORKFLOW,
                         transport=httpx.MockTransport(fake))
     res = p.generate("x", tmp_path / "o.png", seed=1)
-    assert res.retried_after_oom and (res.width, res.height, res.steps) == (448, 672, 14)
+    assert res.retried_after_oom
+    assert (res.width, res.height, res.steps) == (448, 672, _cfg().reduced_steps)
     assert fake.frees == 2  # after the OOM and at the end
 
 
@@ -107,13 +108,14 @@ def test_double_oom_falls_back_to_graphics(pipeline, short_script, research_file
                                            png):
     pl = small_limits(pipeline)
     pl.s.comfyui = _cfg()
+    pl.s.visuals.order = ["comfyui", "graphics"]
     fake = FakeComfy(png, ooms=99)
     j = pl.studio.create_job("ai test").id
     pl.draft(j, script_file=short_script, research_file=research_file)
     pl.approve_script(j, "t")
     o = pl.assets(j, ai_images=True, comfy_transport=httpx.MockTransport(fake))
-    assert o.details["ai"] == 0 and o.details["procedural"] == 3
-    assert len(o.details["ai_errors"]) == 3 and o.fallbacks
+    assert o.details["by_source"] == {"procedural": 3}
+    assert len(o.details["errors"]) == 3 and o.fallbacks
     assert len(fake.prompts) == 6  # one retry per scene, never more
 
 
@@ -122,12 +124,13 @@ def test_ai_images_recorded_with_provenance(pipeline, short_script, research_fil
                                             small_limits, png):
     pl = small_limits(pipeline)
     pl.s.comfyui = _cfg()
+    pl.s.visuals.order = ["comfyui", "graphics"]
     fake = FakeComfy(png)
     j = pl.studio.create_job("ai test").id
     pl.draft(j, script_file=short_script, research_file=research_file)
     pl.approve_script(j, "t")
     o = pl.assets(j, ai_images=True, comfy_transport=httpx.MockTransport(fake))
-    assert o.details["ai"] == 3
+    assert o.details["by_source"] == {"comfyui": 3}
     m = pl.manifest(j)
     a = m.scenes[0]
     assert a.ai_generated and a.provider == "comfyui" and "TEST license" in a.license
@@ -140,26 +143,28 @@ def test_unavailable_or_missing_checkpoint_skips_ai_once(pipeline, short_script,
                                                          small_limits, png):
     pl = small_limits(pipeline)
     pl.s.comfyui = _cfg(checkpoint="other.safetensors")
+    pl.s.visuals.order = ["comfyui", "graphics"]
     fake = FakeComfy(png)
     j = pl.studio.create_job("ai test").id
     pl.draft(j, script_file=short_script, research_file=research_file)
     pl.approve_script(j, "t")
     o = pl.assets(j, ai_images=True, comfy_transport=httpx.MockTransport(fake))
-    assert o.details["procedural"] == 3 and fake.prompts == []
-    assert len(o.details["ai_errors"]) == 1 and "not found" in o.details["ai_errors"][0]
+    assert o.details["by_source"] == {"procedural": 3} and fake.prompts == []
+    assert len(o.details["errors"]) == 1 and "not found" in o.details["errors"][0]
     down = httpx.MockTransport(lambda r: (_ for _ in ()).throw(httpx.ConnectError("refused")))
     o = pl.assets(j, ai_images=True, rebuild=True, comfy_transport=down)
-    assert "not reachable" in o.details["ai_errors"][0]
+    assert "not reachable" in o.details["errors"][0]
 
 
 def test_ai_images_default_from_config(pipeline, short_script, research_file, small_limits,
                                        png):
     pl = small_limits(pipeline)
     pl.s.comfyui = _cfg()
+    pl.s.visuals.order = ["comfyui", "graphics"]
     fake = FakeComfy(png)
     j = pl.studio.create_job("ai default test").id
     pl.draft(j, script_file=short_script, research_file=research_file)
     pl.approve_script(j, "t")
     o = pl.assets(j, comfy_transport=httpx.MockTransport(fake))  # ai_images not given
-    assert o.details["ai"] == 3
+    assert o.details["by_source"] == {"comfyui": 3}
     assert "documentary photograph" in fake.prompts[0]["6"]["inputs"]["text"]

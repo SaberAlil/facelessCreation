@@ -8,11 +8,20 @@ This is engineering documentation, not legal advice.
 
 | Model | Used for | License | Commercial use | Notes |
 |---|---|---|---|---|
-| `hexgrad/Kokoro-82M` (rev `f3ff357179`), voice `af_heart` | narration | Apache-2.0 | yes | Weights and voice packs are in the same Apache-2.0 repo. |
+| `hexgrad/Kokoro-82M` (rev `f3ff357179`), voices `af_heart` (default), `af_bella`, `af_nicole`, `am_michael`, `am_fenrir`, `am_puck`, `bf_emma`, `bm_george`, `bm_fable` | narration | Apache-2.0 | yes | Weights and voice packs are in the same Apache-2.0 repo. Voices other than `af_heart` (~0.5 MB each) download on first use from the same revision. |
 | `Systran/faster-whisper-small.en` (rev `d1d751a5f8`) | caption timing | MIT | yes | Conversion of OpenAI Whisper (MIT). `base.en` fallback is also MIT. |
 | `qwen3:4b` via Ollama (Q4_K_M) | optional script drafts | Apache-2.0 | yes | Drafts are flagged for human fact-checking; the model is not a source. |
 | spaCy `en_core_web_sm` 3.8.0 | Kokoro text processing (misaki) | MIT | yes | **Installed automatically by misaki on first Kokoro run** (12.8 MB pip download). |
 | `stable-diffusion-v1-5/stable-diffusion-v1-5` → `v1-5-pruned-emaonly.safetensors` (4.27 GB, sha256 `6ce01616…fa2fa`, repo rev `451f4fe161`) | AI images via ComfyUI | CreativeML OpenRAIL-M | yes, with use restrictions | Downloaded 26 Nov 2026 with approval into `models/comfyui/checkpoints/`. The license forbids e.g. deceptive, defamatory or harmful uses and impersonation; outputs are AI-generated and are labelled as such in the export. |
+
+## Photos in videos
+
+| Source | Accepted licences | Credits |
+|---|---|---|
+| Wikimedia Commons (search API) | Public domain, CC0, CC BY (any version). **Not** CC BY-SA, NC, ND or GFDL: share-alike could require licensing the whole video the same way. | Photographer + licence recorded per scene; CC BY credits are added to the YouTube/TikTok/Instagram texts automatically. |
+| Openverse (api.openverse.org, anonymous) | Same rule: CC0, public domain mark, CC BY only (requested from the API and checked again). Photos come from Flickr, StockSnap, Commons and others. | Creator + licence + source page recorded; CC BY credits exported. Openverse's licence data comes from the source sites: check the source page for anything you publish widely. |
+| Your uploads | You confirm you own them or may use them commercially. | — |
+| AI images (Stable Diffusion 1.5) | CreativeML OpenRAIL-M | Marked as AI-generated in the export. |
 
 ## Research data
 

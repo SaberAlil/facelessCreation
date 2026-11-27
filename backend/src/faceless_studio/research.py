@@ -73,7 +73,15 @@ class ScriptReport:
         return not self.errors
 
 
-WORDS_PER_SECOND = 2.45  # measured default for Kokoro af_heart at speed 1.0 (re-measure)
+WORDS_PER_SECOND = 2.2  # default; ScriptConfig.words_per_second is used when given
+SCENE_PAUSE_S = 0.25  # matches tts.pause_between_scenes_ms
+TAIL_S = 0.7
+
+
+def estimate_seconds(script: Script, wps: float = WORDS_PER_SECOND) -> float:
+    """Spoken length estimate: words at the narrator's pace plus scene pauses and tail."""
+    words = word_count(script.narration)
+    return round(words / wps + SCENE_PAUSE_S * max(0, len(script.scenes) - 1) + TAIL_S, 1)
 
 
 def check_script(script: Script, research: Research, cfg: ScriptConfig) -> ScriptReport:
@@ -84,13 +92,21 @@ def check_script(script: Script, research: Research, cfg: ScriptConfig) -> Scrip
     errors: list[str] = []
     warnings: list[str] = []
     words = word_count(script.narration)
-    if words < cfg.hard_words_min or words > cfg.hard_words_max:
-        errors.append(f"narration is {words} words; allowed {cfg.hard_words_min}-"
-                      f"{cfg.hard_words_max} (target {cfg.target_words_min}-"
-                      f"{cfg.target_words_max})")
+    est = estimate_seconds(script, cfg.words_per_second)
+    longest = sorted(script.scenes, key=lambda x: -word_count(x.narration))[:2]
+    if est > cfg.max_estimated_s:
+        cut = int((est - cfg.max_estimated_s + 3) * cfg.words_per_second)
+        errors.append(f"too long: about {est:.0f} s spoken (videos must be at most 90 s). "
+                      f"Remove about {cut} words, e.g. from "
+                      + " and ".join(f"{x.id} ({word_count(x.narration)} words)"
+                                     for x in longest))
+    elif est < cfg.min_estimated_s:
+        add = int((cfg.min_estimated_s - est + 3) * cfg.words_per_second)
+        errors.append(f"too short: about {est:.0f} s spoken (videos must be at least 45 s). "
+                      f"Add about {add} words")
     elif not cfg.target_words_min <= words <= cfg.target_words_max:
-        warnings.append(f"narration is {words} words; target {cfg.target_words_min}-"
-                        f"{cfg.target_words_max}")
+        warnings.append(f"{words} words (≈{est:.0f} s); best length is "
+                        f"{cfg.target_words_min}-{cfg.target_words_max} words (65-80 s)")
     n = len(script.scenes)
     if n < cfg.min_scenes or n > cfg.max_scenes:
         warnings.append(f"{n} scenes; recommended {cfg.min_scenes}-{cfg.max_scenes}")
@@ -131,7 +147,7 @@ def check_script(script: Script, research: Research, cfg: ScriptConfig) -> Scrip
         warnings.append("narration contains numbers but no claims are recorded")
     if not research.sources:
         warnings.append("no research sources: every factual statement needs human checking")
-    return ScriptReport(words, round(words / WORDS_PER_SECOND, 1), errors, warnings, flagged)
+    return ScriptReport(words, est, errors, warnings, flagged)
 
 
 # ------------------------------------------------------------- URL ingestion

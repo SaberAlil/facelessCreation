@@ -61,13 +61,18 @@ def frame_plan(timing: VoiceTiming, fps: int) -> tuple[list[int], int]:
     return frames, total
 
 
+def uses_pad(src_w: int | None, src_h: int | None, W: int, H: int, mode: str) -> bool:
+    """Fill the vertical frame (the slow pan shows the photo's width); only pictures wider
+    than ~16:9 get the blurred background instead."""
+    target = W / H
+    ratio = (src_w / src_h) if src_w and src_h else target
+    return mode == "pad" or (mode == "auto" and ratio > target * 3.2)
+
+
 def _fit_filters(src_w: int | None, src_h: int | None, W: int, H: int, mode: str,
                  tag: str) -> str:
     """Aspect-preserving fill (crop) or blurred-background pad, output WxH, ends at [tag]."""
-    target = W / H
-    ratio = (src_w / src_h) if src_w and src_h else target
-    use_pad = mode == "pad" or (mode == "auto" and ratio > target * 1.35)
-    if not use_pad:
+    if not uses_pad(src_w, src_h, W, H, mode):
         return (f"scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,"
                 f"crop={W}:{H},setsar=1[{tag}]")
     return (
@@ -95,6 +100,10 @@ def _zoompan(motion: str, frames: int, W: int, H: int, fps: int, zoom: float) ->
         z, x, y = zc, f"(iw-iw/zoom)*(1-on/{n})", cy
     elif motion == "pan_up":
         z, x, y = zc, cx, f"(ih-ih/zoom)*(1-on/{n})"
+    elif motion == "punch_in":  # close-up of the upper middle, slowly pushing in
+        z, x, y = f"1.5+{zoom}*on/{n}", cx, "(ih-ih/zoom)*0.35"
+    elif motion == "punch_low":  # close-up of the lower middle, slowly drifting right
+        z, x, y = "1.45", f"(iw-iw/zoom)*(0.3+0.4*on/{n})", "(ih-ih/zoom)*0.7"
     else:  # zoom_in_top
         z, x, y = z_in, cx, "0"
     return f"zoompan=z='{z}':x='{x}':y='{y}':d=1:s={W}x{H}:fps={fps}"
@@ -123,7 +132,7 @@ def overlay_filters(text: str, workdir: Path, tag: str, s: Settings, W: int, H: 
 
 def scene_clip_cmd(asset: SceneAsset, src: Path, frames: int, idx: int, W: int, H: int,
                    fps: int, s: Settings, encoder: str, preview: bool, out: Path,
-                   overlay: str = "") -> list[str]:
+                   overlay: str = "", motion: str | None = None) -> list[str]:
     dims: tuple[int | None, int | None] = (None, None)
     if asset.kind == "video":
         w, h, _ = media.media_dims(src)
@@ -137,12 +146,25 @@ def scene_clip_cmd(asset: SceneAsset, src: Path, frames: int, idx: int, W: int, 
         graph += (f";[f]scale={int(W * 1.06) // 2 * 2}:{int(H * 1.06) // 2 * 2},"
                   f"crop={W}:{H}:x='(iw-ow)/2*(1-t/{dur:.3f})':y='(ih-oh)/2'"
                   f"{',' + overlay if overlay else ''},format=yuv420p[v]")
-    else:
-        # Stills: ``src`` is already fitted at 2x (see prepare_still_cmd); add smooth
-        # Ken Burns motion back down to WxH.
+    elif motion in SWEEPS:
+        # Wide photo shown at full height (prepare_wide_cmd, 2x): a full-frame window
+        # sweeps across it, so the close-ups show the photo instead of the blurred bars.
+        a0, a1 = SWEEPS[motion]
         args += ["-loop", "1", "-framerate", str(fps), "-i", str(src)]
-        motion = MOTIONS[idx % len(MOTIONS)]
-        graph = (f"[0:v]{_zoompan(motion, frames, W, H, fps, s.render.motion_zoom)},"
+        graph = (f"[0:v]crop=w={W * 2}:h={H * 2}:y=0:"
+                 f"x='(iw-ow)*({a0}+{a1 - a0}*n/{max(frames - 1, 1)})',"
+                 f"scale={W}:{H}:flags=lanczos,setsar=1,"
+                 f"{overlay + ',' if overlay else ''}format=yuv420p[v]")
+    else:
+        # Stills: ``src`` is fitted at 3x (prepare_still_cmd). The photo is decoded once and
+        # repeated by the loop filter; zoompan moves it at 2x the output size and lanczos
+        # scales down, so every frame moves by a fraction of a pixel: no stepping/wobble
+        # (measured ~9x steadier than zoompan straight to the output size).
+        args += ["-i", str(src)]
+        motion = motion or MOTIONS[idx % len(MOTIONS)]
+        graph = (f"[0:v]loop=loop=-1:size=1:start=0,"
+                 f"{_zoompan(motion, frames, W * 2, H * 2, fps, s.render.motion_zoom)},"
+                 f"scale={W}:{H}:flags=lanczos,setsar=1,"
                  f"{overlay + ',' if overlay else ''}format=yuv420p[v]")
     args += ["-filter_complex", graph, "-map", "[v]", "-frames:v", str(frames), "-r", str(fps),
              "-an", *media.video_codec_args(encoder, s.render, preview, intermediate=True),
@@ -150,10 +172,21 @@ def scene_clip_cmd(asset: SceneAsset, src: Path, frames: int, idx: int, W: int, 
     return args
 
 
+STILL_SCALE = 3  # stills are fitted at 3x and moved at 2x for sub-pixel-smooth motion
+SWEEPS = {"sweep_a": (0.1, 0.4), "sweep_b": (0.6, 0.9)}  # (start, end) share of the width
+
+
+def prepare_wide_cmd(src: Path, H: int, out: Path) -> list[str]:
+    """A wide photo scaled to 2x the output height, aspect kept (for sweep shots)."""
+    return ["ffmpeg", "-hide_banner", "-y", "-nostdin", "-i", str(src), "-vf",
+            f"scale=-2:{H * 2}:flags=lanczos,setsar=1", "-frames:v", "1", "-update", "1",
+            str(out)]
+
+
 def prepare_still_cmd(src: Path, W: int, H: int, fit_mode: str, out: Path) -> list[str]:
-    """Fit a still once at 2x the output size (crop or blurred pad) as a PNG."""
+    """Fit a still once at 3x the output size (crop or blurred pad) as a PNG."""
     w, h, _ = media.media_dims(src)
-    graph = f"[0:v]{_fit_filters(w, h, W * 2, H * 2, fit_mode, 'f')}"
+    graph = f"[0:v]{_fit_filters(w, h, W * STILL_SCALE, H * STILL_SCALE, fit_mode, 'f')}"
     return ["ffmpeg", "-hide_banner", "-y", "-nostdin", "-i", str(src), "-filter_complex",
             graph, "-map", "[f]", "-frames:v", "1", "-update", "1", str(out)]
 
@@ -231,6 +264,20 @@ def cover_cmd(src: Path, is_video: bool, title: str, workdir: Path, s: Settings,
             "-frames:v", "1", "-vf", ",".join(filters), "-update", "1", str(out)]
 
 
+def shot_plan(asset: SceneAsset, frames: int, fps: int, punch_in_min_s: float
+              ) -> list[tuple[int, str | None]]:
+    """(frames, motion) per shot of a scene. Long still scenes are cut into close-ups of
+    the same picture (wide → upper close-up → lower close-up), so the picture changes
+    every few seconds."""
+    if asset.kind == "video" or punch_in_min_s <= 0 or frames < punch_in_min_s * fps:
+        return [(frames, None)]
+    n = 3 if frames >= 2 * punch_in_min_s * fps else 2
+    shares = [0.55, 0.45] if n == 2 else [0.4, 0.3, 0.3]
+    sizes = [round(frames * x) for x in shares[:-1]]
+    sizes.append(frames - sum(sizes))
+    return list(zip(sizes, [None, "punch_in", "punch_low"][:n], strict=True))
+
+
 def _write_concat(files: list[Path], out: Path) -> None:
     lines = []
     for f in files:
@@ -241,9 +288,14 @@ def _write_concat(files: list[Path], out: Path) -> None:
 
 def render_job(s: Settings, paths: JobPaths, script: Script, timing: VoiceTiming,
                manifest: AssetManifest, ass: Path | None, preview: bool = False,
-               dry_run: bool = False, force_encoder: str | None = None) -> dict:
+               dry_run: bool = False, force_encoder: str | None = None,
+               progress=None) -> dict:
     """Render the job. Returns details (encoder, fallbacks, outputs, commands)."""
     media.require_ffmpeg()
+    missing = [a.scene_id for a in manifest.scenes if a.kind == "missing"]
+    if missing:
+        raise ToolFailed(f"scene(s) {', '.join(missing)} have no picture yet: choose a photo, "
+                         "an AI image or upload one in the Pictures step")
     if [a.scene_id for a in manifest.scenes] != [t.scene_id for t in timing.scenes]:
         raise ToolFailed("asset manifest and narration timing list different scenes; "
                          "re-run 'faceless assets' and 'faceless voice'")
@@ -262,19 +314,19 @@ def render_job(s: Settings, paths: JobPaths, script: Script, timing: VoiceTiming
             encoder = "libx264"
     try:
         return _render(s, paths, timing, manifest, ass, preview, dry_run, encoder, reason,
-                       fallbacks, script)
+                       fallbacks, script, progress)
     except ToolFailed as e:
         if encoder != "h264_nvenc":
             raise
         log.warning("NVENC render failed (%s); retrying with libx264", str(e)[:200])
         fallbacks.append(f"libx264 after NVENC failure: {str(e)[:300]}")
         return _render(s, paths, timing, manifest, ass, preview, dry_run, "libx264",
-                       "fallback after NVENC runtime failure", fallbacks, script)
+                       "fallback after NVENC runtime failure", fallbacks, script, progress)
 
 
 def _render(s: Settings, paths: JobPaths, timing: VoiceTiming, manifest: AssetManifest,
             ass: Path | None, preview: bool, dry_run: bool, encoder: str, reason: str,
-            fallbacks: list[str], script: Script) -> dict:
+            fallbacks: list[str], script: Script, progress=None) -> dict:
     r = s.render
     W, H = (r.preview_width, r.preview_height) if preview else (r.width, r.height)
     frames, total = frame_plan(timing, r.fps)
@@ -298,15 +350,18 @@ def _render(s: Settings, paths: JobPaths, timing: VoiceTiming, manifest: AssetMa
                 if next((a.kind for a in manifest.scenes if a.scene_id == k), "") != "procedural"}
     with lock:
         for i, (asset, n) in enumerate(zip(manifest.scenes, frames, strict=True)):
+            if progress and not dry_run:
+                progress("Rendering scenes", i, len(frames) + 1)
             src = asset_file(paths, asset)
             key = hash_obj({"sha": asset.sha256, "n": n, "i": i, "W": W, "H": H, "fps": r.fps,
                             "enc": encoder, "zoom": r.motion_zoom, "fit": r.fit_mode,
-                            "q": media.video_codec_args(encoder, r, preview, True), "v": 3,
+                            "punch": r.punch_in_min_s,
+                            "q": media.video_codec_args(encoder, r, preview, True), "v": 6,
                             "ov": overlays.get(asset.scene_id, "")})[:16]
             clip = clip_dir / f"{asset.scene_id}-{key}.mp4"
             clips.append(clip)
             if asset.kind != "video":
-                still = clip_dir / f"{asset.scene_id}-{asset.sha256[:12]}-{r.fit_mode}.png"
+                still = clip_dir / f"{asset.scene_id}-{asset.sha256[:12]}-{r.fit_mode}-x3.png"
                 pcmd = prepare_still_cmd(src, W, H, r.fit_mode, tmp_path_for(still))
                 plan.commands.append(pcmd)
                 if not dry_run and not still.is_file() and not clip.is_file():
@@ -316,16 +371,37 @@ def _render(s: Settings, paths: JobPaths, timing: VoiceTiming, manifest: AssetMa
             ov = overlays.get(asset.scene_id, "")
             ov_filter = overlay_filters(ov, clip_dir, asset.scene_id, s, W, H) \
                 if ov and not dry_run else (f"drawtext=<overlay: {ov}>" if ov else "")
-            cmd = scene_clip_cmd(asset, src, n, i, W, H, r.fps, s, encoder, preview,
-                                 tmp_path_for(clip), ov_filter)
-            plan.commands.append(cmd)
-            if dry_run:
-                continue
-            if clip.is_file():
-                reused += 1
-                continue
-            run(cmd, timeout=r.scene_timeout_s, log_file=paths.render_log)
-            tmp_path_for(clip).replace(clip)
+            shots = shot_plan(asset, n, r.fps, r.punch_in_min_s)
+            wide = None
+            if len(shots) > 1:
+                clips.pop()
+                ow, oh, _ = media.media_dims(asset_file(paths, asset))
+                if uses_pad(ow, oh, W, H, r.fit_mode) and ow and oh and ow / oh > 1.2 * W / H:
+                    # close-ups of a wide photo sweep across it instead of zooming into
+                    # the blurred bars
+                    wide = clip_dir / f"{asset.scene_id}-{asset.sha256[:12]}-wide.png"
+                    wcmd = prepare_wide_cmd(asset_file(paths, asset), H, tmp_path_for(wide))
+                    plan.commands.append(wcmd)
+                    if not dry_run and not wide.is_file():
+                        run(wcmd, timeout=120, log_file=paths.render_log)
+                        tmp_path_for(wide).replace(wide)
+                    shots = [(sn, m if k == 0 else ("sweep_a", "sweep_b")[(k - 1) % 2])
+                             for k, (sn, m) in enumerate(shots)]
+            for k, (sn, motion) in enumerate(shots):
+                part = clip if len(shots) == 1 else clip.with_name(f"{clip.stem}-{k}.mp4")
+                if len(shots) > 1:
+                    clips.append(part)
+                shot_src = wide if wide is not None and motion in SWEEPS else src
+                cmd = scene_clip_cmd(asset, shot_src, sn, i, W, H, r.fps, s, encoder, preview,
+                                     tmp_path_for(part), ov_filter, motion)
+                plan.commands.append(cmd)
+                if dry_run:
+                    continue
+                if part.is_file():
+                    reused += 1
+                    continue
+                run(cmd, timeout=r.scene_timeout_s, log_file=paths.render_log)
+                tmp_path_for(part).replace(part)
 
         concat = work / "concat.txt"
         mix = work / "mix.wav"
@@ -339,6 +415,8 @@ def _render(s: Settings, paths: JobPaths, timing: VoiceTiming, manifest: AssetMa
             return {"dry_run": True, "encoder": encoder, "commands": plan.commands,
                     "frames": frames, "total_frames": total}
         _write_concat(clips, concat)
+        if progress:
+            progress("Mixing audio and burning in subtitles", len(frames), len(frames) + 1)
         run(acmd, timeout=600, log_file=paths.render_log)
         loud = media.normalize_audio(mix, mix_norm, r.loudness_lufs, r.true_peak_db,
                                      r.audio_rate, channels=2, log_file=paths.render_log)
@@ -356,7 +434,8 @@ def _render(s: Settings, paths: JobPaths, timing: VoiceTiming, manifest: AssetMa
             f.unlink(missing_ok=True)
     # Clean stale clips from previous plans for this resolution.
     keep = {c.name for c in clips}
-    keep |= {f"{a.scene_id}-{a.sha256[:12]}-{r.fit_mode}.png" for a in manifest.scenes}
+    keep |= {f"{a.scene_id}-{a.sha256[:12]}-{r.fit_mode}-x3.png" for a in manifest.scenes}
+    keep |= {f"{a.scene_id}-{a.sha256[:12]}-wide.png" for a in manifest.scenes}
     for f in clip_dir.glob(".ov-*.txt"):
         f.unlink(missing_ok=True)
     for old in [*clip_dir.glob("*.mp4"), *clip_dir.glob("*.png")]:

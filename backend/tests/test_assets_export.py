@@ -59,7 +59,7 @@ def test_asset_selection_prefers_matching_library_then_graphics(
     pl.approve_script(j, "t")
     o = pl.assets(j)
     m = pl.manifest(j)
-    assert o.details["library"] == 1 and o.details["procedural"] == 2
+    assert o.details["by_source"] == {"local": 1, "procedural": 2}
     assert m.scenes[1].library_id == a.id
     assert m.scenes[0].provider == "procedural" and m.scenes[0].commercial_use
     assert len({x.sha256 for x in m.scenes}) == 3  # no repeated background

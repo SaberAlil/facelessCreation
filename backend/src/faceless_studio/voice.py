@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from . import media
@@ -11,7 +12,7 @@ from .config import Settings
 from .jobs import JobPaths
 from .providers.tts import TTSProvider
 from .schemas import SceneTiming, Script, VoiceTiming
-from .util import FacelessError, hash_obj, run, tmp_path_for, write_json
+from .util import FacelessError, GateError, hash_obj, run, tmp_path_for, write_json
 
 log = logging.getLogger("faceless")
 
@@ -50,8 +51,45 @@ def _concat_with_pauses(files: list[Path], pause_s: float, tail_s: float, rate: 
     run(args, timeout=300, log_file=log_file)
 
 
+def _fit_duration(s: Settings, files: list[Path], durations: list[float], pause: float,
+                  tail: float, log_file: Path) -> tuple[list[float], float]:
+    """Keep the narration within the publishable range.
+
+    Over the limit by at most ``render.max_speedup``: time-stretch every scene with
+    FFmpeg ``atempo`` (pitch preserved). Further over, or too short: stop with a clear
+    message naming what to change.
+    """
+    fixed = pause * (len(files) - 1) + tail
+    total = sum(durations) + fixed
+    limit = s.render.max_duration_s - 0.5
+    if total < s.render.min_duration_s:
+        raise GateError(f"narration is {total:.1f} s; videos must be at least "
+                        f"{s.render.min_duration_s:.0f} s",
+                        hint="add a sentence or two to the script, then approve it again")
+    if total <= limit:
+        return durations, 1.0
+    factor = sum(durations) / (limit - fixed)
+    if factor > s.render.max_speedup:
+        order = sorted(range(len(durations)), key=lambda i: -durations[i])[:2]
+        raise GateError(
+            f"narration is {total:.1f} s; the limit is {s.render.max_duration_s:.0f} s "
+            f"(too long to fix by speeding up)",
+            hint="shorten the script by about "
+            f"{int((total - limit) * 2.2) + 3} words, e.g. in scene(s) "
+            + ", ".join(f"#{i + 1} ({durations[i]:.0f} s)" for i in order))
+    out = []
+    for f in files:
+        tmp = tmp_path_for(f)
+        run(["ffmpeg", "-hide_banner", "-y", "-i", str(f), "-af", f"atempo={factor:.4f}",
+             "-c:a", "pcm_s16le", str(tmp)], timeout=120, log_file=log_file)
+        tmp.replace(f)
+        out.append(media.duration(f))
+    return out, factor
+
+
 def synthesize_narration(
     s: Settings, paths: JobPaths, script: Script, provider: TTSProvider,
+    progress: Callable[[str, int, int], None] | None = None,
 ) -> tuple[VoiceTiming, dict]:
     vd = paths.voice_dir
     vd.mkdir(parents=True, exist_ok=True)
@@ -60,7 +98,9 @@ def synthesize_narration(
     scene_files: list[Path] = []
     durations: list[float] = []
     cache_hits = 0
-    for scene in script.scenes:
+    for n, scene in enumerate(script.scenes, 1):
+        if progress:
+            progress("Recording the narration", n - 1, len(script.scenes))
         text = scene.narration.strip()
         if not text:
             raise FacelessError(f"scene {scene.id} has empty narration")
@@ -82,6 +122,8 @@ def synthesize_narration(
 
     pause = s.tts.pause_between_scenes_ms / 1000
     tail = s.tts.tail_silence_ms / 1000
+    durations, speedup = _fit_duration(s, scene_files, durations, pause, tail,
+                                       paths.logs / "voice.log")
     raw = vd / "narration.raw.wav"
     _concat_with_pauses(scene_files, pause, tail, s.tts.sample_rate, raw, paths.logs / "voice.log")
     tmp = tmp_path_for(paths.narration)
@@ -104,13 +146,14 @@ def synthesize_narration(
     expected = sum(durations) + pause * (len(durations) - 1) + tail
     if abs(expected - total) > 0.1:
         log.warning("narration duration %.3fs differs from scene sum %.3fs", total, expected)
-    vt = VoiceTiming(provider=provider.name, voice=s.tts.voice if provider.name == "kokoro"
+    used_voice = getattr(provider, "cfg", s.tts).voice
+    vt = VoiceTiming(provider=provider.name, voice=used_voice if provider.name == "kokoro"
                      else provider.model_id(), model=provider.model_id(),
                      sample_rate=s.tts.sample_rate, duration=round(total, 4), scenes=timings,
                      loudness_lufs=loud.get("input_i"), demo=provider.demo)
     write_json(paths.timing, vt.model_dump())
     return vt, {"cache_hits": cache_hits, "scenes": len(scene_files),
-                "loudness": loud, "duration_s": total}
+                "loudness": loud, "duration_s": total, "speedup": round(speedup, 4)}
 
 
 def import_user_narration(s: Settings, paths: JobPaths, script: Script, src: Path

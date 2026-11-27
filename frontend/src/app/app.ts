@@ -6,25 +6,25 @@ import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
   imports: [RouterOutlet, RouterLink, RouterLinkActive],
   template: `
     <header class="top">
-      <a class="brand" routerLink="/jobs">Faceless&nbsp;Studio</a>
+      <a class="brand" routerLink="/">▶ Faceless Studio</a>
       <nav>
+        <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">Home</a>
         <a routerLink="/calendar" routerLinkActive="active">Calendar</a>
-        <a routerLink="/jobs" routerLinkActive="active">Jobs</a>
-        <a routerLink="/system" routerLinkActive="active">System</a>
+        <a routerLink="/videos" routerLinkActive="active">Videos</a>
+        <a routerLink="/settings" routerLinkActive="active">Settings</a>
       </nav>
-      <span class="note">Local only · publishing is manual</span>
     </header>
     <main><router-outlet /></main>
   `,
   styles: `
-    .top { display: flex; gap: 1.5rem; align-items: center; padding: .75rem 1.25rem;
-           background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-    .brand { font-weight: 700; color: var(--fg); text-decoration: none; }
-    nav { display: flex; gap: 1rem; }
-    nav a { color: var(--muted); text-decoration: none; padding: .25rem 0; }
-    nav a.active { color: var(--fg); border-bottom: 2px solid var(--accent); }
-    .note { margin-left: auto; color: var(--muted); font-size: .85rem; }
-    main { padding: 1.25rem; max-width: 1200px; margin: 0 auto; }
+    .top { display: flex; gap: 2rem; align-items: center; padding: .8rem 1.5rem;
+           background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap;
+           position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; }
+    .brand { font-weight: 800; color: var(--fg); text-decoration: none; letter-spacing: .01em; }
+    nav { display: flex; gap: 1.25rem; flex-wrap: wrap; }
+    nav a { color: var(--muted); text-decoration: none; padding: .3rem 0; font-weight: 500; }
+    nav a.active { color: var(--fg); box-shadow: inset 0 -2px 0 var(--accent); }
+    main { padding: 1.5rem 1.25rem 4rem; max-width: 1150px; margin: 0 auto; }
   `,
 })
 export class App {}

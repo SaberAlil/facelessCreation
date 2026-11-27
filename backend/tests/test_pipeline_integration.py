@@ -33,7 +33,8 @@ def test_end_to_end_preview_final_and_gates(pipeline, short_script, research_fil
     j = _ready_job(pl, short_script, research_file, tone_tts)
     vt = pl.timing(j)
     assert vt.demo and len(vt.scenes) == 3
-    assert vt.scenes[1].start == pytest.approx(vt.scenes[0].speech_end + 0.35, abs=0.02)
+    assert vt.scenes[1].start == pytest.approx(vt.scenes[0].speech_end +
+                                            pl.s.tts.pause_between_scenes_ms / 1000, abs=0.02)
     assert abs(media.duration(pl.paths(j).narration) - vt.duration) < 0.01
 
     # Preview is allowed before rights review; final render is not.

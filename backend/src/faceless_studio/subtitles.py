@@ -209,12 +209,17 @@ def words_for_translation(sentences: list[tuple[str, float, float]],
     return out
 
 
+def _max_chars(cfg: SubtitleConfig) -> int:
+    """Word-style captions stay on one line; classic subtitles may use every line."""
+    return cfg.max_chars_per_line * (1 if cfg.style == "words" else cfg.max_lines)
+
+
 def chunk_translated(sentences: list[tuple[str, float, float]], translations: list[str],
                      cfg: SubtitleConfig) -> list[Caption]:
     """Captions for translated text: split each sentence into readable chunks by text,
     time them by length within the English sentence's span, and merge chunks that would
     be too short to read."""
-    max_chars = cfg.max_chars_per_line * cfg.max_lines
+    max_chars = _max_chars(cfg)
     caps: list[Caption] = []
     for (_en, start, end), text in zip(sentences, translations, strict=True):
         words = text.split()
@@ -277,7 +282,7 @@ def chunk_words(words: list[Word], cfg: SubtitleConfig) -> list[Caption]:
                                 text=layout_lines(" ".join(w.text for w in cur), cfg)))
             cur.clear()
 
-    max_chars = cfg.max_chars_per_line * cfg.max_lines
+    max_chars = _max_chars(cfg)
     for i, w in enumerate(words):
         if cur:
             gap = w.start - cur[-1].end
@@ -294,6 +299,20 @@ def chunk_words(words: list[Word], cfg: SubtitleConfig) -> list[Caption]:
                 cur.insert(0, Word(text=last.text.replace("\n", " "), start=last.start,
                                    end=last.end))
             flush()
+    # one-word captions spoken too fast to read (< 0.25 s) join the next caption
+    i = 0
+    while i < len(caps) and len(caps) > 1:
+        c = caps[i]
+        if c.end - c.start >= 0.25:
+            i += 1
+            continue
+        j = i + 1 if i + 1 < len(caps) else i - 1
+        a, b = sorted((i, j))
+        joined = f"{caps[a].text} {caps[b].text}".replace("\n", " ")
+        caps[a:b + 1] = [Caption(index=0, start=caps[a].start, end=caps[b].end,
+                                 text=layout_lines(joined, cfg))]
+    for k, c in enumerate(caps, 1):
+        c.index = k
     # timing polish: hold captions through short gaps, enforce minimum duration, no overlap
     for i, c in enumerate(caps):
         nxt = caps[i + 1].start if i + 1 < len(caps) else None
@@ -404,8 +423,55 @@ def _ass_escape(text: str) -> str:
     return t.replace("\n", "\\N")
 
 
+def _word_starts(c: Caption, n: int, words: list[Word] | None) -> list[float]:
+    """Start time of each of the caption's n words: the real (aligned) word times when the
+    caption still matches them, otherwise spread by word length."""
+    if words:
+        inside = [w for w in words if w.start >= c.start - 0.02 and w.end <= c.end + 0.35]
+        inside = [w for w in inside if w.start < c.end]
+        if len(inside) == n:
+            return [max(c.start, w.start) for w in inside]
+    tokens = c.text.split()
+    weights = [len(w) + 1 for w in tokens]
+    tot = sum(weights) or 1
+    out, cur = [], c.start
+    for wt in weights:
+        out.append(cur)
+        cur += (c.end - c.start) * wt / tot
+    return out
+
+
+def _ass_words(c: Caption, cfg: SubtitleConfig, words: list[Word] | None) -> list[str]:
+    """One event per spoken word: the whole caption, with the current word highlighted.
+    The caption pops in once (quick scale-up); the highlight then moves word by word."""
+    lines = [ln.split() for ln in c.text.split("\n")]
+    n = sum(len(ln) for ln in lines)
+    if n == 0:
+        return []
+    starts = _word_starts(c, n, words)
+    hi, lo = "{\\c" + cfg.accent_colour + "&}", "{\\c" + cfg.primary_colour + "&}"
+    events = []
+    for k in range(n):
+        st = c.start if k == 0 else starts[k]
+        en = starts[k + 1] if k + 1 < n else c.end
+        if en - st < 0.01:
+            continue
+        idx, parts = 0, []
+        for ln in lines:
+            toks = []
+            for tok in ln:
+                tok = _ass_escape(tok)
+                toks.append(f"{hi}{tok}{lo}" if idx == k else tok)
+                idx += 1
+            parts.append(" ".join(toks))
+        pop = "{\\fad(60,0)\\fscx88\\fscy88\\t(0,110,\\fscx100\\fscy100)}" if k == 0 else ""
+        body = "\\N".join(parts)
+        events.append(f"Dialogue: 0,{_ts_ass(st)},{_ts_ass(en)},Default,,0,0,0,,{pop}{body}")
+    return events
+
+
 def to_ass(caps: list[Caption], cfg: SubtitleConfig, width: int, height: int,
-           keywords: set[str] | None = None) -> str:
+           keywords: set[str] | None = None, words: list[Word] | None = None) -> str:
     style = (f"Style: Default,{cfg.font},{cfg.font_size},{cfg.primary_colour},"
              f"{cfg.accent_colour},{cfg.outline_colour},&H64000000,-1,0,0,0,100,100,0,0,1,"
              f"{cfg.outline},{cfg.shadow},2,{cfg.margin_l},{cfg.margin_r},{cfg.margin_v},1")
@@ -420,6 +486,9 @@ def to_ass(caps: list[Caption], cfg: SubtitleConfig, width: int, height: int,
     )
     lines = []
     for c in caps:
+        if cfg.style == "words":
+            lines += _ass_words(c, cfg, words)
+            continue
         text = _ass_escape(c.text)
         if cfg.highlight_keywords and keywords:
             def hl(m: re.Match) -> str:
@@ -436,6 +505,8 @@ def to_ass(caps: list[Caption], cfg: SubtitleConfig, width: int, height: int,
 
 
 def write_tracks(track: CaptionTrack, srt: Path, ass: Path, cfg: SubtitleConfig,
-                 width: int, height: int, keywords: set[str] | None = None) -> None:
+                 width: int, height: int, keywords: set[str] | None = None,
+                 words: list[Word] | None = None) -> None:
     atomic_write_text(srt, to_srt(track.captions))
-    atomic_write_text(ass, to_ass(track.captions, cfg, width, height, keywords))
+    atomic_write_text(ass, to_ass(track.captions, cfg, width, height, keywords,
+                                  words if track.language == "en" else None))

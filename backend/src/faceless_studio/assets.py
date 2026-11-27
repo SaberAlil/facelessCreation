@@ -12,7 +12,7 @@ from .db import Database
 from .jobs import JobPaths
 from .procedural import plan_graphic, render_graphic
 from .schemas import AssetManifest, LibraryAsset, RightsStatus, SceneAsset, Script
-from .util import FacelessError, read_json, sha256_file, utcnow, write_json
+from .util import FacelessError, read_json, safe_filename, sha256_file, utcnow, write_json
 
 log = logging.getLogger("faceless")
 
@@ -47,89 +47,286 @@ def procedural_asset(s: Settings, paths: JobPaths, scene_index: int, scene_id: s
     )
 
 
+def _proper_nouns(topic: str) -> list[str]:
+    import re
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'&.-]*", topic)
+    return [w for i, w in enumerate(words) if i > 0 and (w[0].isupper() or w.isupper())]
+
+
+def commons_queries(sc, topic: str) -> list[str]:
+    """Concrete photo searches for a scene. With a named subject (IKEA, Costco…): the name
+    with the scene's terms, the name with the topic's key words, the name alone, and only
+    then the scene's generic terms."""
+    from .research import topic_terms
+    proper = _proper_nouns(topic)
+    name = " ".join(proper)
+    terms = [t for t in sc.search_terms if t]
+    key = sorted(topic_terms(topic) - {p.lower() for p in proper}, key=len, reverse=True)[:2]
+    qs: list[str] = []
+    if name:
+        # Searches that name the subject come first, so photos show the real thing
+        qs += [t if name.lower() in t.lower() else f"{name} {t}" for t in terms[:2]]
+        qs += [f"{name} {k}" for k in key]
+        qs.append(name)
+    qs += terms[:3]
+    if not name and key:
+        qs.append(" ".join(key))
+    return list(dict.fromkeys(q.strip() for q in qs if q.strip()))
+
+
+def _commons_pick(s: Settings, db: Database, sc, topic: str, used_titles: set[str],
+                  tried: set[str]) -> tuple[LibraryAsset | None, str, list[str]]:
+    """First acceptable Commons photo for the scene; returns (asset, title, queries)."""
+    from .providers import commons
+    from .research import _stem, topic_terms
+    v = s.visuals
+    queries = commons_queries(sc, topic)
+    for q in queries:
+        words = {_stem(w) for w in topic_terms(q)}
+        for photo in commons.search(q, v.commons_licenses, v.commons_min_width,
+                                    v.commons_candidates, exclude=used_titles | tried):
+            hay = f"{photo.title} {photo.description}".lower()
+            if words and not any(w in hay for w in words):
+                continue  # search hit that does not mention what we asked for
+            dest = s.cache_dir / "commons" / safe_filename(photo.title)[:100]
+            if dest.suffix.lower() not in (".jpg", ".jpeg", ".png"):
+                dest = dest.with_suffix(".jpg")
+            if not dest.is_file():
+                commons.download(photo, dest)
+            a = library.add_asset(
+                db, s.library_dir, dest, license=photo.license, license_url=photo.license_url,
+                commercial_use=True, source_url=photo.page_url, creator=photo.artist,
+                attribution=commons.attribution(photo),
+                attribution_required=photo.attribution_required, provider="commons",
+                title=photo.title, tags=q.lower().split(), notes=photo.description,
+                move=True)
+            return a, photo.title, queries
+    return None, "", queries
+
+
+def _openverse_pick(s: Settings, db: Database, sc, topic: str, used_titles: set[str],
+                    tried: set[str]) -> tuple[LibraryAsset | None, str]:
+    """First acceptable Openverse photo for the scene; returns (asset, candidate key)."""
+    from .providers import openverse
+    from .research import _stem, topic_terms
+    v = s.visuals
+    for q in commons_queries(sc, topic)[:4]:
+        words = {_stem(w) for w in topic_terms(q)}
+        for photo in openverse.search(q, v.commons_min_width, v.commons_candidates,
+                                      exclude=used_titles | tried):
+            hay = f"{photo.title} {photo.description}".lower()
+            if words and not any(w in hay for w in words):
+                continue
+            dest = s.cache_dir / "openverse" / f"{safe_filename(photo.id)[:60]}.jpg"
+            if not dest.is_file():
+                try:
+                    openverse.download(photo, dest)
+                except FacelessError as e:
+                    log.info("openverse %s: %s", photo.id, e)
+                    continue
+            a = library.add_asset(
+                db, s.library_dir, dest, license=photo.license, license_url=photo.license_url,
+                commercial_use=True, source_url=photo.page_url, creator=photo.artist,
+                attribution=openverse.attribution(photo),
+                attribution_required=photo.attribution_required, provider="openverse",
+                title=photo.title, tags=q.lower().split(), notes=photo.description,
+                move=True)
+            return a, photo.key
+    return None, ""
+
+
+def narration_sha(sc) -> str:
+    from .util import hash_obj
+    return hash_obj(" ".join(sc.narration.split()))[:16]
+
+
+def missing_asset(scene_id: str, why: str) -> SceneAsset:
+    return SceneAsset(scene_id=scene_id, kind="missing", path="", sha256="", license="",
+                      commercial_use=False, provider="none", reason=why)
+
+
+class _Sources:
+    """Picture sources for one job, set up lazily (ComfyUI checked once)."""
+
+    def __init__(self, s: Settings, db: Database, paths: JobPaths, order: list[str],
+                 comfy_transport=None, use_pexels: bool = False):
+        self.s, self.db, self.paths = s, db, paths
+        self.order = list(order)
+        if use_pexels and "pexels" not in self.order:
+            self.order.insert(self.order.index("commons") + 1 if "commons" in self.order
+                              else 0, "pexels")
+        self.comfy_transport = comfy_transport
+        self._comfy = None
+        self._comfy_checked = False
+        self._pexels = None
+        self.errors: list[str] = []
+
+    def comfy(self):
+        if not self._comfy_checked:
+            self._comfy_checked = True
+            from .providers.images import ComfyUIProvider
+            try:
+                c = ComfyUIProvider(self.s.comfyui, self.s.resources, self.s.locks_dir,
+                                    self.s.resolve(self.s.comfyui.workflow),
+                                    transport=self.comfy_transport)
+                ok, why = c.available()
+                if ok:
+                    self._comfy = c
+                else:
+                    self.errors.append(f"AI images unavailable: {why}")
+            except FacelessError as e:
+                self.errors.append(f"AI images unavailable: {e}")
+        return self._comfy
+
+    def pexels(self):
+        if self._pexels is None:
+            from .providers.stock import PexelsProvider
+            self._pexels = PexelsProvider(self.s.stock)
+        return self._pexels
+
+
+def pick_for_scene(src: _Sources, sc, index: int, script: Script, topic: str,
+                   used_ids: set[str], used_titles: set[str], order: list[str] | None = None,
+                   tried: set[str] | None = None, seed_offset: int = 0) -> SceneAsset:
+    s, db, paths = src.s, src.db, src.paths
+    pool = [a for a in library.list_assets(db) if a.kind in ("video", "image")
+            and a.commercial_use and a.provider in ("local", "upload")]
+    tried = tried or set()
+    for source in order or src.order:
+        try:
+            if source == "library":
+                ranked = sorted(((library.score(a, sc.search_terms, sc.visual), a)
+                                 for a in pool if a.id not in used_ids),
+                                key=lambda t: -t[0])
+                if ranked and ranked[0][0] > 0:
+                    return _from_library(ranked[0][1], sc.id, s.library_dir,
+                                         f"your library: matched {ranked[0][0]} tag(s)", [])
+            elif source == "commons":
+                a, title, _q = _commons_pick(s, db, sc, topic, used_titles, tried)
+                if a is not None and a.id not in used_ids:
+                    used_titles.add(title)
+                    return _from_library(a, sc.id, s.library_dir,
+                                         "Wikimedia Commons photo", sorted(tried | {title}))
+            elif source == "openverse":
+                a, key = _openverse_pick(s, db, sc, topic, used_titles, tried)
+                if a is not None and a.id not in used_ids:
+                    used_titles.add(key)
+                    return _from_library(a, sc.id, s.library_dir, "Openverse photo",
+                                         sorted(tried | {key}))
+            elif source == "pexels" and sc.search_terms:
+                a = _pexels_pick(s, db, src.pexels(), sc.search_terms, used_ids)
+                if a is not None:
+                    return _from_library(a, sc.id, s.library_dir, "Pexels", [])
+            elif source == "comfyui":
+                comfy = src.comfy()
+                if comfy is not None:
+                    a = _ai_image(s, db, comfy, paths, sc, topic, seed_offset)
+                    return _from_library(a, sc.id, s.library_dir, "AI image (ComfyUI)", [])
+            elif source == "graphics":
+                return procedural_asset(s, paths, index, sc.id, sc.overlay,
+                                        script.title if index == 0 else None,
+                                        "original graphic")
+        except FacelessError as e:
+            src.errors.append(f"{sc.id} {source}: {e}")
+            log.warning("%s: %s failed: %s", sc.id, source, e)
+    return missing_asset(sc.id, "no suitable picture found: try another photo, an AI "
+                         "image, or upload your own")
+
+
 def build_manifest(s: Settings, db: Database, paths: JobPaths, script: Script,
                    use_pexels: bool = False, keep_existing: bool = True,
-                   ai_images: bool = False, comfy_transport=None) -> tuple[AssetManifest, dict]:
+                   ai_images: bool = True, comfy_transport=None, topic: str = "",
+                   progress=None) -> tuple[AssetManifest, dict]:
     previous = load_manifest(paths) if keep_existing else None
     prev_by_scene = {a.scene_id: a for a in previous.scenes} if previous else {}
-    pool = [a for a in library.list_assets(db) if a.kind in ("video", "image")
-            and a.commercial_use]
-    used: set[str] = set()
-    pexels = None
-    stats = {"library": 0, "pexels": 0, "procedural": 0, "kept": 0, "ai": 0,
-             "pexels_errors": [], "ai_errors": []}
-    if use_pexels:
-        from .providers.stock import PexelsProvider
-        pexels = PexelsProvider(s.stock)
-    comfy = None
-    if ai_images:
-        from .providers.images import ComfyUIProvider
-        comfy = ComfyUIProvider(s.comfyui, s.resources, s.locks_dir,
-                                s.resolve(s.comfyui.workflow), transport=comfy_transport)
-        ok, why = comfy.available()
-        if not ok:
-            stats["ai_errors"].append(f"all scenes: {why}")
-            log.warning("AI images skipped: %s", why)
-            comfy = None
-    scenes_out: list[SceneAsset] = []
+    order = [o for o in s.visuals.order if ai_images or o != "comfyui"]
+    src = _Sources(s, db, paths, order, comfy_transport, use_pexels)
+    used_ids: set[str] = set()
+    used_titles: set[str] = set()
+    stats: dict = {"kept": 0, "missing": 0, "by_source": {}}
+    out: list[SceneAsset] = []
     for i, sc in enumerate(script.scenes):
+        if progress:
+            progress("Finding pictures", i, len(script.scenes))
         prev = prev_by_scene.get(sc.id)
-        # Keep manual choices (and anything still valid) unless the user rebuilds.
-        if prev and prev.reason.startswith("manual") and _still_valid(prev, paths):
-            scenes_out.append(prev)
+        # Keep only pictures you chose yourself; automatic ones are picked again because
+        # the scene's text or search terms changed.
+        if prev and prev.kind != "missing" and _still_valid(prev, paths) and \
+                prev.reason.startswith("manual") and \
+                prev.narration_sha in ("", narration_sha(sc)):
+            out.append(prev)
             if prev.library_id:
-                used.add(prev.library_id)
+                used_ids.add(prev.library_id)
+            used_titles.update(prev.candidates)
             stats["kept"] += 1
             continue
-        ranked = sorted(((library.score(a, sc.search_terms, sc.visual), a) for a in pool
-                         if a.id not in used), key=lambda t: -t[0])
-        cands = [a.id for sc_, a in ranked[: s.stock.per_scene_candidates] if sc_ > 0]
-        if ranked and ranked[0][0] > 0:
-            best = ranked[0][1]
-            used.add(best.id)
-            scenes_out.append(_from_library(best, sc.id, s.library_dir,
-                                            f"auto: matched {ranked[0][0]} terms", cands))
-            stats["library"] += 1
-            continue
-        if pexels and sc.search_terms:
-            try:
-                got = _pexels_pick(s, db, pexels, sc.search_terms, used)
-            except FacelessError as e:
-                stats["pexels_errors"].append(f"{sc.id}: {e}")
-                got = None
-            if got:
-                used.add(got.id)
-                scenes_out.append(_from_library(got, sc.id, s.library_dir,
-                                                "auto: pexels search", []))
-                stats["pexels"] += 1
-                continue
-        if comfy is not None:
-            try:
-                got = _ai_image(s, db, comfy, paths, sc)
-                used.add(got.id)
-                scenes_out.append(_from_library(got, sc.id, s.library_dir,
-                                                "auto: AI illustration (ComfyUI)", []))
-                stats["ai"] += 1
-                continue
-            except FacelessError as e:  # OOM twice, timeout, unreachable: use graphics
-                stats["ai_errors"].append(f"{sc.id}: {e}")
-        scenes_out.append(procedural_asset(
-            s, paths, i, sc.id, sc.overlay, script.title if i == 0 else None,
-            "auto: no matching licensed asset; original graphic"))
-        stats["procedural"] += 1
-    manifest = AssetManifest(scenes=scenes_out, music=previous.music if previous else None)
+        a = pick_for_scene(src, sc, i, script, topic or script.title, used_ids, used_titles)
+        if a.library_id:
+            used_ids.add(a.library_id)
+        stats["by_source"][a.provider] = stats["by_source"].get(a.provider, 0) + 1
+        stats["missing"] += a.kind == "missing"
+        out.append(a)
+    if progress:
+        progress("Finding pictures", len(script.scenes), len(script.scenes))
+    manifest = AssetManifest(scenes=out, music=previous.music if previous else None)
     save_manifest(paths, manifest)
+    stats["errors"] = src.errors[:20]
     return manifest, stats
+
+
+def scene_action(s: Settings, db: Database, paths: JobPaths, script: Script, scene_id: str,
+                 action: str, topic: str, upload: Path | None = None,
+                 comfy_transport=None) -> AssetManifest:
+    """Replace one scene's picture: "photo" (next Commons photo), "ai" (new AI image) or
+    "upload" (a file you provide; you confirm you own it or may use it)."""
+    m = load_manifest(paths)
+    if m is None:
+        raise FacelessError("no pictures yet: run the Pictures step first")
+    idx = next((i for i, a in enumerate(m.scenes) if a.scene_id == scene_id), None)
+    if idx is None:
+        raise FacelessError(f"no scene {scene_id}")
+    sc = next(x for x in script.scenes if x.id == scene_id)
+    cur = m.scenes[idx]
+    used_ids = {a.library_id for a in m.scenes if a.library_id and a.scene_id != scene_id}
+    used_titles = {t for a in m.scenes for t in a.candidates}
+    src = _Sources(s, db, paths, [], comfy_transport)
+    stamp = f"manual: {utcnow()}"
+    if action == "upload":
+        if upload is None:
+            raise FacelessError("no file uploaded")
+        a = library.add_asset(db, s.library_dir, upload, license="Uploaded by you (own or "
+                              "licensed media)", commercial_use=True, provider="upload",
+                              title=upload.name, tags=sc.search_terms, move=True)
+        new = _from_library(a, scene_id, s.library_dir, stamp, [])
+        new.rights = RightsStatus.CONFIRMED
+    elif action in ("photo", "ai"):
+        order = [o for o in s.visuals.order if o in ("commons", "openverse")] or ["commons"] \
+            if action == "photo" else ["comfyui"]
+        attempts = sum(1 for _ in cur.candidates) if action == "photo" else \
+            int(cur.reason.rsplit("#", 1)[-1]) + 1 if "#" in cur.reason else 1
+        new = pick_for_scene(src, sc, idx, script, topic, used_ids, used_titles, order,
+                             tried=set(cur.candidates), seed_offset=attempts)
+        if new.kind == "missing":
+            raise FacelessError("; ".join(src.errors[-2:]) or
+                                ("no other suitable photo found" if action == "photo" else
+                                 "AI image failed"))
+        new.reason = f"{stamp} {new.reason}" + (f" #{attempts}" if action == "ai" else "")
+    else:
+        raise FacelessError(f"unknown action {action}")
+    new.narration_sha = narration_sha(sc)
+    m.scenes[idx] = new
+    save_manifest(paths, m)
+    return m
 
 
 def _pexels_pick(s: Settings, db: Database, pexels, terms: list[str], used: set[str]
                  ) -> LibraryAsset | None:
+    from .providers.stock import PEXELS_LICENSE, PEXELS_LICENSE_URL
     for term in terms[:2]:
         for cand in pexels.search(term, per_page=s.stock.per_scene_candidates + 2):
             dest = s.cache_dir / "pexels" / f"pexels-{cand['id']}.mp4"
             if not dest.is_file():
                 pexels.download(cand, dest)
-            from .providers.stock import PEXELS_LICENSE, PEXELS_LICENSE_URL
             a = library.add_asset(
                 db, s.library_dir, dest, license=PEXELS_LICENSE, license_url=PEXELS_LICENSE_URL,
                 commercial_use=True, source_url=cand["page_url"], creator=cand["creator"],
@@ -140,11 +337,13 @@ def _pexels_pick(s: Settings, db: Database, pexels, terms: list[str], used: set[
     return None
 
 
-def _ai_image(s: Settings, db: Database, comfy, paths: JobPaths, sc) -> LibraryAsset:
+def _ai_image(s: Settings, db: Database, comfy, paths: JobPaths, sc, topic: str = "",
+              seed_offset: int = 0) -> LibraryAsset:
     from .util import hash_obj
-    seed = int(hash_obj([paths.root.name, sc.id, sc.visual])[:8], 16)
-    prompt = ", ".join(x for x in [sc.visual, *sc.search_terms[:3], s.comfyui.style,
-                                   "vertical composition, no text"] if x)
+    seed = int(hash_obj([paths.root.name, sc.id, sc.visual])[:8], 16) + seed_offset * 7919
+    prompt = ", ".join(x for x in [sc.visual or topic, *sc.search_terms[:2],
+                                   f"subject: {topic}" if topic else "", s.comfyui.style,
+                                   "vertical composition, no text, no logos"] if x)
     out = s.cache_dir / "comfyui" / f"{paths.root.name}-{sc.id}-{seed}.png"
     res = comfy.generate(prompt, out, seed)
     return library.add_asset(
@@ -158,6 +357,8 @@ def _ai_image(s: Settings, db: Database, comfy, paths: JobPaths, sc) -> LibraryA
 
 
 def _still_valid(a: SceneAsset, paths: JobPaths) -> bool:
+    if a.kind == "missing":
+        return False
     p = Path(a.path) if Path(a.path).is_absolute() else paths.root / a.path
     return p.is_file() and sha256_file(p) == a.sha256
 
@@ -252,6 +453,9 @@ def asset_problems(paths: JobPaths, m: AssetManifest, script: Script) -> list[st
     if [a.scene_id for a in m.scenes] != ids:
         out.append("manifest scenes do not match the script; re-run 'faceless assets'")
     items = m.scenes + ([m.music] if m.music else [])
+    for a in [x for x in items if x.kind == "missing"]:
+        out.append(f"{a.scene_id}: needs a picture")
+    items = [x for x in items if x.kind != "missing"]
     for a in items:
         if not a.commercial_use:
             out.append(f"{a.scene_id}: not cleared for commercial use")

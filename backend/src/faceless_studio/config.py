@@ -34,10 +34,14 @@ class ChannelConfig(_Section):
 
 
 class ScriptConfig(_Section):
-    target_words_min: int = 150
-    target_words_max: int = 185
-    hard_words_min: int = 100
-    hard_words_max: int = 240
+    target_words_min: int = 135
+    target_words_max: int = 165
+    hard_words_min: int = 80
+    hard_words_max: int = 220
+    # Kokoro af_heart measured 2.16-2.59 words/s on real scripts: estimate conservatively.
+    words_per_second: float = 2.2
+    max_estimated_s: float = 86.0  # scripts estimated longer than this cannot be approved
+    min_estimated_s: float = 45.0
     min_scenes: int = 4
     max_scenes: int = 12
 
@@ -62,7 +66,7 @@ class TTSConfig(_Section):
     lang_code: str = "a"
     speed: float = 1.0
     sample_rate: int = 24000
-    pause_between_scenes_ms: int = 350
+    pause_between_scenes_ms: int = 250  # scenes are short beats (often one sentence)
     tail_silence_ms: int = 700
     narration_lufs: float = -16.0
     device: Literal["cpu", "cuda"] = "cpu"
@@ -73,14 +77,17 @@ class SubtitleConfig(_Section):
     fallback_model: str = "base.en"
     device: Literal["cpu", "cuda"] = "cpu"
     compute_type: str = "int8"
-    min_words: int = 2
-    max_words: int = 5
-    max_chars_per_line: int = 16
+    # "words": Shorts-style, 1-3 big words at a time with the spoken word highlighted;
+    # "lines": classic two-line subtitles.
+    style: Literal["words", "lines"] = "words"
+    min_words: int = 1
+    max_words: int = 3
+    max_chars_per_line: int = 15
     max_lines: int = 2
-    min_duration_s: float = 0.45
+    min_duration_s: float = 0.3
     font: str = "DejaVu Sans"
-    font_size: int = 84
-    outline: int = 5
+    font_size: int = 90
+    outline: int = 6
     shadow: int = 2
     primary_colour: str = "&H00FFFFFF"
     accent_colour: str = "&H0000D7FF"
@@ -92,7 +99,7 @@ class SubtitleConfig(_Section):
     divergence_ratio_warn: float = 0.9
     # Language of the burned-in captions. "en" = the narration itself; anything else is a
     # sentence-by-sentence translation by the local LLM, timed to the English narration.
-    burn_language: str = "it"
+    burn_language: str = "en"  # default for new videos; "none" = no burned-in subtitles
     translate_model: str = ""  # empty = llm.model
 
 
@@ -112,8 +119,12 @@ class RenderConfig(_Section):
     loudness_lufs: float = -14.0
     true_peak_db: float = -1.0
     music_volume_db: float = -22.0
-    overlay_on_media: bool = True  # draw the scene's overlay text on photos/AI images/clips
+    overlay_on_media: bool = False  # draw the scene's overlay text on photos (off by request)
+    max_speedup: float = 1.08  # narration may be sped up this much to fit max_duration_s
     motion_zoom: float = 0.10
+    # Still scenes longer than this cut halfway to a close-up of the same picture, so the
+    # picture changes every few seconds (0 = off).
+    punch_in_min_s: float = 4.0
     fit_mode: Literal["auto", "crop", "pad"] = "auto"
     min_duration_s: float = 45.0
     max_duration_s: float = 90.0
@@ -140,6 +151,18 @@ class ResearchConfig(_Section):
     excerpt_chars: int = 1500
 
 
+class VisualsConfig(_Section):
+    # Where scene pictures come from, in order. No generated graphics: if every source
+    # fails for a scene, the assets step stops and asks you to pick or upload a photo.
+    order: list[str] = Field(default_factory=lambda: ["library", "commons", "openverse",
+                                                      "comfyui"])
+    commons_licenses: list[str] = Field(default_factory=lambda: [
+        "public domain", "pd", "cc0", "cc by 1.0", "cc by 2.0", "cc by 2.5", "cc by 3.0",
+        "cc by 4.0", "cc-by-1.0", "cc-by-2.0", "cc-by-2.5", "cc-by-3.0", "cc-by-4.0"])
+    commons_min_width: int = 900
+    commons_candidates: int = 12
+
+
 class StockConfig(_Section):
     pexels_enabled: bool = False
     max_download_mb: int = 80
@@ -155,13 +178,13 @@ class ComfyConfig(_Section):
     checkpoint: str = "v1-5-pruned-emaonly.safetensors"
     checkpoint_license: str = "CreativeML OpenRAIL-M (stable-diffusion-v1-5)"
     checkpoint_commercial_use: bool = True  # OpenRAIL-M allows commercial use of outputs
-    style: str = ("documentary photograph, natural light, realistic, 35mm, sharp focus, "
-                  "high detail")
+    style: str = ("professional documentary photograph, natural light, photorealistic, "
+                  "35mm lens, sharp focus, highly detailed, depth of field")
     width: int = 512
     height: int = 768
-    steps: int = 20
-    reduced_steps: int = 14
-    cfg: float = 6.5
+    steps: int = 28
+    reduced_steps: int = 16
+    cfg: float = 7.0
     timeout_s: float = 300.0
     estimated_vram_mib: int = 3500
 
@@ -181,6 +204,8 @@ class Settings(_Section):
     render: RenderConfig = Field(default_factory=RenderConfig)
     resources: ResourceConfig = Field(default_factory=ResourceConfig)
     research: ResearchConfig = Field(default_factory=ResearchConfig)
+    visuals: VisualsConfig = Field(default_factory=VisualsConfig)
+    reviewer: str = ""  # your name, recorded with approvals (set it in the dashboard)
     stock: StockConfig = Field(default_factory=StockConfig)
     comfyui: ComfyConfig = Field(default_factory=ComfyConfig)
     cache: CacheConfig = Field(default_factory=CacheConfig)

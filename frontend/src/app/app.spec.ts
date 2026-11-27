@@ -1,38 +1,33 @@
 import { TestBed } from '@angular/core/testing';
-import { provideHttpClient, withInterceptors, HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse, provideHttpClient, withInterceptors } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { provideRouter } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { App } from './app';
-import { facelessHeader, errorText } from './api';
-import { ApprovalForm } from './pages/approval-form';
-import { JobsPage } from './pages/jobs';
-import { HttpErrorResponse } from '@angular/common/http';
+import { errorText, estimateSeconds, facelessHeader } from './api';
+import { VideosPage } from './pages/videos';
+import { ScriptStep } from './pages/steps/script-step';
+import { stateLabel } from './pages/labels';
 
-function setup(extra: unknown[] = []) {
+function setup() {
   TestBed.configureTestingModule({
-    providers: [
-      provideRouter([]),
-      provideHttpClient(withInterceptors([facelessHeader])),
-      provideHttpClientTesting(),
-      ...extra as [],
-    ],
+    providers: [provideRouter([]), provideHttpClient(withInterceptors([facelessHeader])),
+                provideHttpClientTesting()],
   });
   return TestBed.inject(HttpTestingController);
 }
 
 describe('App shell', () => {
-  it('renders navigation', async () => {
+  it('renders the four sections', async () => {
     setup();
     const f = TestBed.createComponent(App);
     await f.whenStable();
     const text = (f.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).toContain('Calendar');
-    expect(text).toContain('publishing is manual');
+    for (const s of ['Home', 'Calendar', 'Videos', 'Settings']) expect(text).toContain(s);
   });
 });
 
-describe('facelessHeader interceptor', () => {
+describe('api helpers', () => {
   it('adds X-Faceless to every request', async () => {
     const http = setup();
     const p = firstValueFrom(TestBed.inject(HttpClient).post('/api/jobs', {}));
@@ -41,52 +36,66 @@ describe('facelessHeader interceptor', () => {
     req.flush({ id: 'x' });
     await p;
   });
-});
 
-describe('errorText', () => {
   it('shows API detail and hint', () => {
     const e = new HttpErrorResponse({ status: 409, error: { detail: 'not approved', hint: 'do X' } });
     expect(errorText(e)).toBe('not approved — do X');
+    expect(errorText(new HttpErrorResponse({ status: 504 }))).toContain('server is not running');
+  });
+
+  it('estimates spoken length like the server', () => {
+    const scene = { narration: Array(25).fill('word').join(' ') };
+    const est = estimateSeconds(Array(6).fill(scene)); // 150 words
+    expect(est).toBeGreaterThan(65);
+    expect(est).toBeLessThan(75);
+  });
+
+  it('labels states in plain language', () => {
+    expect(stateLabel('RESEARCH_REVIEW').text).toBe('Check the script');
+    expect(stateLabel('EXPORTED').cls).toBe('ok');
   });
 });
 
-describe('ApprovalForm', () => {
-  it('stays disabled until reviewer and APPROVE are entered', async () => {
-    setup();
-    const f = TestBed.createComponent(ApprovalForm);
-    f.componentRef.setInput('label', 'Approve');
-    await f.whenStable();
-    const button = () => (f.nativeElement as HTMLElement).querySelector('button.primary') as HTMLButtonElement;
-    expect(button().disabled).toBe(true);
-    const emitted: unknown[] = [];
-    f.componentInstance.approve.subscribe((a) => emitted.push(a));
-    const inputs = (f.nativeElement as HTMLElement).querySelectorAll('input');
-    const type = async (el: HTMLInputElement, value: string) => {
-      el.value = value;
-      el.dispatchEvent(new Event('input'));
-      await f.whenStable();
-    };
-    await type(inputs[0], 'Sam');
-    await type(inputs[1], 'approve');
-    expect(button().disabled).toBe(true);
-    await type(inputs[1], 'APPROVE');
-    expect(button().disabled).toBe(false);
-    button().click();
-    expect(emitted).toEqual([{ confirm: 'APPROVE', reviewer: 'Sam', notes: '', acknowledge_flags: false }]);
-  });
-});
-
-describe('JobsPage', () => {
-  it('lists jobs from the API', async () => {
+describe('VideosPage', () => {
+  it('lists videos with plain-language status', async () => {
     const http = setup();
-    const f = TestBed.createComponent(JobsPage);
+    const f = TestBed.createComponent(VideosPage);
     http.expectOne('/api/jobs').flush([
-      { id: 'd001-x', topic: 'Why prices end in 99', day: 1, date: '2027-01-01', state: 'RENDERED',
-        failed_stage: null, error: null, created: '', updated: 'now' },
+      { id: 'd001-x', topic: 'Why prices end in 99', day: 1, date: '2026-12-01', state: 'RENDERED',
+        failed_stage: null, error: null, created: '', updated: '' },
     ]);
+    http.expectOne('/api/settings').flush({ default_subtitles: 'en' });
     await f.whenStable();
     const text = (f.nativeElement as HTMLElement).textContent ?? '';
     expect(text).toContain('Why prices end in 99');
-    expect(text).toContain('RENDERED');
+    expect(text).toContain('Watch & approve');
+  });
+});
+
+describe('ScriptStep', () => {
+  it('approves with one click (no typing) when the length is right', async () => {
+    const http = setup();
+    const f = TestBed.createComponent(ScriptStep);
+    f.componentRef.setInput('jobId', 'j1');
+    const scenes = Array.from({ length: 6 }, (_, i) => ({ id: `s${i}`, narration: Array(25).fill('word').join(' '),
+      visual: '', search_terms: [], overlay: '', claim_ids: [] }));
+    await f.whenStable();
+    http.expectOne('/api/jobs/j1/research').flush({ research: { sources: [] }, problems: [] });
+    await Promise.resolve();
+    http.expectOne('/api/jobs/j1/script').flush({
+      script: { title: 'T', hook: '', narration: '', scenes, claims: [], platform: {}, provider: 'x', provider_meta: {} },
+      approved: false, report: { words: 150, est_seconds: 70, errors: [], warnings: [], flagged_claims: [] },
+      research_problems: [] });
+    await f.whenStable();
+    const el = f.nativeElement as HTMLElement;
+    f.detectChanges();
+    expect(el.textContent).toContain('Good length');
+    const btn = el.querySelector('button.primary.big') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    expect(el.querySelector('input[placeholder="Type APPROVE"]')).toBeNull();
+    btn.click();
+    const req = http.expectOne('/api/jobs/j1/approve-script');
+    expect(req.request.body).toEqual({ acknowledge_flags: true });
+    req.flush({ approved: true, hash: 'h', task: null });
   });
 });

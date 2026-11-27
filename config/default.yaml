@@ -9,13 +9,16 @@ channel:
   name: The Hidden Logic
   language: en
   default_hashtags:
-    - "#TheHiddenLogic"
-    - "#economics"
+  - '#TheHiddenLogic'
+  - '#economics'
 script:
-  target_words_min: 150
-  target_words_max: 185
-  hard_words_min: 100
-  hard_words_max: 240
+  target_words_min: 135
+  target_words_max: 165
+  hard_words_min: 80
+  hard_words_max: 220
+  words_per_second: 2.2
+  max_estimated_s: 86.0
+  min_estimated_s: 45.0
   min_scenes: 4
   max_scenes: 12
 llm:
@@ -36,7 +39,7 @@ tts:
   lang_code: a
   speed: 1.0
   sample_rate: 24000
-  pause_between_scenes_ms: 350
+  pause_between_scenes_ms: 250
   tail_silence_ms: 700
   narration_lufs: -16.0
   device: cpu
@@ -45,25 +48,26 @@ subtitles:
   fallback_model: base.en
   device: cpu
   compute_type: int8
-  min_words: 2
-  max_words: 5
-  max_chars_per_line: 16
+  style: words
+  min_words: 1
+  max_words: 3
+  max_chars_per_line: 15
   max_lines: 2
-  min_duration_s: 0.45
+  min_duration_s: 0.3
   font: DejaVu Sans
-  font_size: 84
-  outline: 5
+  font_size: 90
+  outline: 6
   shadow: 2
-  primary_colour: "&H00FFFFFF"
-  accent_colour: "&H0000D7FF"
-  outline_colour: "&H00000000"
+  primary_colour: '&H00FFFFFF'
+  accent_colour: '&H0000D7FF'
+  outline_colour: '&H00000000'
   highlight_keywords: false
   margin_v: 600
   margin_l: 90
   margin_r: 170
   divergence_ratio_warn: 0.9
-  burn_language: it
-  translate_model: ""
+  burn_language: en
+  translate_model: ''
 render:
   width: 1080
   height: 1920
@@ -80,11 +84,13 @@ render:
   loudness_lufs: -14.0
   true_peak_db: -1.0
   music_volume_db: -22.0
-  overlay_on_media: true
+  overlay_on_media: false
+  max_speedup: 1.08
   motion_zoom: 0.1
+  punch_in_min_s: 4.0
   fit_mode: auto
   min_duration_s: 45.0
-  max_duration_s: 120.0
+  max_duration_s: 90.0
   duration_tolerance_s: 0.15
   scene_timeout_s: 600.0
   final_timeout_s: 1800.0
@@ -96,11 +102,34 @@ resources:
   sample_interval_s: 1.0
 research:
   calendar_column_hints:
-    - research
-    - source
+  - research
+  - source
   auto_wikipedia: true
   max_sources: 4
   excerpt_chars: 1500
+visuals:
+  order:
+  - library
+  - commons
+  - openverse
+  - comfyui
+  commons_licenses:
+  - public domain
+  - pd
+  - cc0
+  - cc by 1.0
+  - cc by 2.0
+  - cc by 2.5
+  - cc by 3.0
+  - cc by 4.0
+  - cc-by-1.0
+  - cc-by-2.0
+  - cc-by-2.5
+  - cc-by-3.0
+  - cc-by-4.0
+  commons_min_width: 900
+  commons_candidates: 12
+reviewer: ''
 stock:
   pexels_enabled: false
   max_download_mb: 80
@@ -114,12 +143,13 @@ comfyui:
   checkpoint: v1-5-pruned-emaonly.safetensors
   checkpoint_license: CreativeML OpenRAIL-M (stable-diffusion-v1-5)
   checkpoint_commercial_use: true
-  style: documentary photograph, natural light, realistic, 35mm, sharp focus, high detail
+  style: professional documentary photograph, natural light, photorealistic, 35mm
+    lens, sharp focus, highly detailed, depth of field
   width: 512
   height: 768
-  steps: 20
-  reduced_steps: 14
-  cfg: 6.5
+  steps: 28
+  reduced_steps: 16
+  cfg: 7.0
   timeout_s: 300.0
   estimated_vram_mib: 3500
 cache:

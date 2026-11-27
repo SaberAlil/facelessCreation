@@ -1,10 +1,13 @@
 # Walkthrough: one video, then a weekly batch
 
-> **Short version.** Fill the calendar's "Research / sources" column (`https://… | fact`,
-> one per line), import it, start ComfyUI on the laptop, then run `faceless make --day N`
-> (or press **Make video** in the dashboard). It stops three times for your approval:
-> script, images, final video. Run it again after each approval. The sections below
-> explain every step and the manual alternatives.
+> **Short version.** In the dashboard: **Calendar → Make video**. The video page walks you
+> through **Script → Pictures → Video → Publish**; click **Approve** at each step (the next
+> steps start by themselves). Each sentence or two is its own scene with its own picture
+> (real Wikimedia Commons / Openverse photos, AI images or your uploads), and long scenes cut
+> to close-ups, so the picture changes every ~3 s. Captions show 1–3 words with the spoken
+> word highlighted; their language and the narrator's voice can be changed per video (top
+> of the video page). Videos stay within 45–90 s. The sections below explain the terminal
+> commands behind each step.
 
 All commands run inside the dev container from the repository root. Replace `JOB` with
 the id that `faceless new` prints (any unique prefix works). Every command that is

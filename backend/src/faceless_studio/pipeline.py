@@ -29,6 +29,7 @@ from .schemas import (
     Research,
     Script,
     VoiceTiming,
+    Word,
 )
 from .util import (
     FacelessError,
@@ -68,10 +69,46 @@ class StageOutcome:
     fallbacks: list[str] = field(default_factory=list)
 
 
+LANGUAGES = {"en": "English", "it": "Italian", "es": "Spanish", "fr": "French",
+             "de": "German", "pt": "Portuguese", "none": "No subtitles"}
+
+
 class Pipeline:
     def __init__(self, studio: Studio | None = None):
         self.studio = studio or Studio()
         self.s = self.studio.settings
+        # Set by the dashboard worker: progress(message, done, total)
+        self.progress: Callable[[str, int, int], None] | None = None
+
+    def _progress(self, message: str, done: int = 0, total: int = 0) -> None:
+        if self.progress:
+            self.progress(message, done, total)
+
+    # ------------------------------------------------------- job options
+    def job_options(self, job_id: str) -> dict:
+        f = self.paths(job_id).root / "options.json"
+        opts = read_json(f) if f.is_file() else {}
+        opts.setdefault("subtitles", self.s.subtitles.burn_language)
+        opts.setdefault("voice", self.s.tts.voice)
+        return opts
+
+    def set_job_options(self, job_id: str, subtitles: str | None = None,
+                        voice: str | None = None) -> dict:
+        from .providers.tts import VOICES
+        opts = self.job_options(job_id)
+        if voice is not None:
+            if voice not in VOICES:
+                raise FacelessError(f"unknown voice {voice!r}; choose one of "
+                                    f"{', '.join(VOICES)}")
+            opts["voice"] = voice
+        if subtitles is not None:
+            if subtitles not in LANGUAGES:
+                raise FacelessError(f"unknown subtitle language {subtitles!r}; choose one of "
+                                    f"{', '.join(LANGUAGES)}")
+            opts["subtitles"] = subtitles
+        write_json(self.paths(job_id).root / "options.json", opts)
+        self.refresh(job_id, "options changed")
+        return opts
 
     # ------------------------------------------------------------ artifacts
     def paths(self, job_id: str):
@@ -108,8 +145,13 @@ class Pipeline:
         return CaptionTrack.model_validate(read_json(p)) if p.is_file() else None
 
     # --------------------------------------------------------------- hashes
-    def _tts_settings(self) -> dict:
-        t = self.s.tts
+    def tts_config(self, job_id: str):
+        """The TTS settings for a job: the global ones with the job's chosen voice."""
+        v = self.job_options(job_id)["voice"]
+        return self.s.tts.model_copy(update={"voice": v, "lang_code": v[0]})
+
+    def _tts_settings(self, job_id: str) -> dict:
+        t = self.tts_config(job_id)
         return {"voice": t.voice, "speed": t.speed, "lang": t.lang_code,
                 "pause": t.pause_between_scenes_ms, "tail": t.tail_silence_ms,
                 "lufs": t.narration_lufs, "repo": t.kokoro_repo}
@@ -127,7 +169,7 @@ class Pipeline:
     def voice_input_hash(self, job_id: str, provider_key: str) -> str | None:
         sh = self.script_hash(job_id)
         return None if sh is None else hash_obj({"script": sh, "provider": provider_key,
-                                                 "tts": self._tts_settings()})
+                                                 "tts": self._tts_settings(job_id)})
 
     def voice_output_hash(self, job_id: str) -> str | None:
         p = self.paths(job_id)
@@ -146,7 +188,8 @@ class Pipeline:
         vo, sh = self.voice_output_hash(job_id), self.script_hash(job_id)
         if vo is None or sh is None:
             return None
-        sub = self.s.subtitles.model_dump(exclude={"fallback_model"})
+        sub = self.s.subtitles.model_dump(exclude={"fallback_model", "burn_language"})
+        sub["language"] = self.job_options(job_id)["subtitles"]
         return hash_obj({"voice": vo, "script": sh, "subs": sub,
                          "W": self.s.render.width, "H": self.s.render.height})
 
@@ -447,12 +490,15 @@ class Pipeline:
                 return {**d, "provider_key": key, "provider": "user"}
         else:
             from .providers.tts import get_tts
-            tts = tts or get_tts(self.s.tts, provider)
+            tts = tts or get_tts(self.tts_config(job_id), provider)
             key = f"{tts.name}:{tts.model_id()}"
 
             def fn(metrics: StageMetrics) -> dict:
                 metrics.device = self.s.tts.device if tts.name == "kokoro" else "cpu"
-                vt, d = voice.synthesize_narration(self.s, p, sc, tts)
+                vt, d = voice.synthesize_narration(self.s, p, sc, tts, self._progress)
+                if d.get("speedup", 1.0) > 1.0:
+                    metrics.fallbacks.append(f"narration sped up x{d['speedup']:.3f} to stay "
+                                             f"within {self.s.render.max_duration_s:.0f} s")
                 if tts.demo:
                     metrics.fallbacks.append(f"demo voice ({tts.name}); not publishable")
                 return {**d, "provider_key": key, "provider": tts.name, "demo": tts.demo}
@@ -471,13 +517,16 @@ class Pipeline:
         if ai_images is None:
             ai_images = self.s.comfyui.enabled and self.s.comfyui.use_by_default
 
+        topic = self.studio.job_input(job_id).topic
+
         def fn(metrics: StageMetrics) -> dict:
-            metrics.device = "cuda" if ai_images else "cpu"
+            metrics.device = "cuda" if ai_images else "network"
             m, stats = assets_mod.build_manifest(self.s, self.studio.db, p, sc, use_pexels,
                                                  keep_existing=not rebuild,
                                                  ai_images=ai_images,
-                                                 comfy_transport=comfy_transport)
-            metrics.fallbacks += [f"graphics after AI error: {e}" for e in stats["ai_errors"]]
+                                                 comfy_transport=comfy_transport, topic=topic,
+                                                 progress=self._progress)
+            metrics.fallbacks += stats["errors"][:5]
             return {**stats, "scenes": [(a.scene_id, a.provider, a.template or a.library_id)
                                         for a in m.scenes]}
 
@@ -499,6 +548,19 @@ class Pipeline:
         m = assets_mod.replace_scene_asset(self.s, self.studio.db, self.paths(job_id), sc,
                                            scene_id, library_id, procedural, overlay)
         self._record_manual_assets(job_id, f"replace {scene_id}")
+        return m
+
+    def scene_picture(self, job_id: str, scene_id: str, action: str,
+                      upload: Path | None = None, comfy_transport: Any = None
+                      ) -> AssetManifest:
+        """Another Commons photo, a new AI image, or your own upload for one scene."""
+        if self.manifest(job_id) is None:
+            raise GateError("no pictures yet", hint="run the Pictures step first")
+        sc = self.require_script(job_id)
+        m = assets_mod.scene_action(self.s, self.studio.db, self.paths(job_id), sc, scene_id,
+                                    action, self.studio.job_input(job_id).topic, upload,
+                                    comfy_transport)
+        self._record_manual_assets(job_id, f"{action} {scene_id}")
         return m
 
     def set_music(self, job_id: str, library_id: str | None) -> AssetManifest:
@@ -583,9 +645,10 @@ class Pipeline:
             if problems:
                 raise ValidationFailed("caption timing problems: " + "; ".join(problems[:5]))
             en_track = CaptionTrack(captions=caps, **track_kw)
-            lang = cfg.burn_language.lower()
-            if lang == "en":
-                track = en_track
+            lang = self.job_options(job_id)["subtitles"].lower()
+            self._progress("Timing the subtitles", 1, 2)
+            if lang in ("en", "none"):
+                track = en_track.model_copy(update={"burn": lang != "none"})
             else:
                 # English captions are kept as captions.en.srt; the burned track is a
                 # sentence-level translation timed to the English narration.
@@ -631,8 +694,9 @@ class Pipeline:
         keywords = {subtitles.norm_token(w) for s in sc.scenes for w in s.overlay.split()
                     if len(w) > 3}
         write_json(p.captions_json, track.model_dump())
+        words = [Word(**w) for w in read_json(p.words)] if p.words.is_file() else None
         subtitles.write_tracks(track, p.srt, p.ass, self.s.subtitles, self.s.render.width,
-                               self.s.render.height, keywords)
+                               self.s.render.height, keywords, words)
 
     def import_captions(self, job_id: str, srt_file: Path) -> CaptionTrack:
         if not self.stage_fresh(job_id, "voice"):
@@ -691,7 +755,8 @@ class Pipeline:
         vt = self.timing(job_id)
         m = self.manifest(job_id)
         assert vt and m
-        ass = p.ass if subs_ok else None
+        tr = self.captions(job_id) if subs_ok else None
+        ass = p.ass if subs_ok and tr is not None and tr.burn else None
         if dry_run:
             return render.render_job(self.s, p, sc, vt, m, ass, preview, dry_run=True,
                                      force_encoder=encoder)
@@ -703,10 +768,11 @@ class Pipeline:
             with file_lock(self.s.locks_dir, "render", f"render:{job_id}",
                            self.s.resources.gpu_lock_timeout_s):
                 details = render.render_job(self.s, p, sc, vt, m, ass, preview,
-                                            force_encoder=encoder)
+                                            force_encoder=encoder, progress=self._progress)
             metrics.device = "nvenc" if details["encoder"] == "h264_nvenc" else "cpu"
             metrics.fallbacks += details.get("fallbacks", [])
             out = p.preview if preview else p.final
+            self._progress("Checking the video", 1, 1)
             val = quality.validate_video(out, vt.duration, self.s.render, preview=preview)
             write_json(p.render_dir / ("validation.preview.json" if preview
                                        else "validation.json"), val)
@@ -749,6 +815,8 @@ class Pipeline:
         needs_review = bool(tr and (tr.approximate or (tr.divergence_ratio is not None and
                                                         tr.divergence_ratio <
                                                         self.s.subtitles.divergence_ratio_warn)))
+        if tr and not tr.burn:
+            add("subtitles", True, "no subtitles burned in (your choice)", required=False)
         add("captions reviewed where required", bool(tr) and (not needs_review or tr.reviewed),
             "approximate or divergent timing requires 'faceless subtitles JOB --mark-reviewed'"
             if needs_review and not (tr and tr.reviewed) else
@@ -858,7 +926,13 @@ class Pipeline:
         With ``auto_draft``, a job without a script gets research (calendar cell or
         Wikipedia) and a local-LLM draft, then stops at the script review gate.
         """
+        friendly = {"research": "Reading the sources", "draft (local LLM)":
+                    "Writing the script (local AI)", "voice": "Recording the narration",
+                    "assets": "Finding pictures", "subtitles": "Timing the subtitles",
+                    "render": "Rendering the video", "export": "Preparing the downloads"}
+
         def say(msg: str) -> None:
+            self._progress(friendly.get(msg, msg), 0, 0)
             if on_step:
                 on_step(msg)
         for _ in range(12):

@@ -183,6 +183,10 @@ def test_overlay_drawn_on_media_not_on_graphics(pipeline, short_script, research
     pl.assets(j)
     out = pl.render(j, preview=True, dry_run=True)
     clip_cmds = [" ".join(c) for c in out["commands"] if "zoompan" in " ".join(c)]
+    assert not any("overlay:" in c for c in clip_cmds)    # off by default: no top text
+    pl.s.render.overlay_on_media = True
+    out = pl.render(j, preview=True, dry_run=True)
+    clip_cmds = [" ".join(c) for c in out["commands"] if "zoompan" in " ".join(c)]
     assert "overlay: Round up" in clip_cmds[1]          # library photo (scene 2)
     assert "overlay:" not in clip_cmds[0]                # original graphic (scene 1)
     o = pl.render(j, preview=True)
